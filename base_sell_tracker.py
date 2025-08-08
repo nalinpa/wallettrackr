@@ -274,7 +274,7 @@ class BaseComprehensiveSellTracker(BaseTracker):
         
         return sorted(scored_tokens, key=lambda x: x[2], reverse=True)
     
-    def analyze_all_sell_methods(self, num_wallets: int = 174, days_back: int = 1):
+    def analyze_all_sell_methods(self, num_wallets: int = 1, days_back: int = 1):
         """Analyze ALL sell methods on Base network"""
         print(f"\n🔵 COMPREHENSIVE BASE SELL PRESSURE ANALYSIS")
         print(f"=" * 60)
@@ -491,7 +491,7 @@ def main():
         return
     
     try:
-        results = tracker.analyze_all_sell_methods(num_wallets=174, days_back=1)
+        results = tracker.analyze_all_sell_methods(num_wallets=1, days_back=1)
         
         if results and results.get("ranked_tokens"):
             print(f"\n🚨 BASE SELL PRESSURE DETECTED!")

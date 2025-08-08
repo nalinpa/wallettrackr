@@ -168,23 +168,31 @@ class BaseTracker:
             return "1inch"
         
     
-    def get_recent_block_range(self, days_back: int = 7) -> tuple:
-        """Get block range for recent days on Base (2 second block times)"""
+    def get_recent_block_range(self, days_back: float = 7) -> tuple:
+        """Get block range for recent days on Base (2 second block times)
+        Now handles float days_back for partial days
+        """
         try:
             current_block_result = self.make_alchemy_request("eth_blockNumber", [])
             if not current_block_result.get("result"):
                 return "0x0", "0x0"
                 
             current_block = int(current_block_result["result"], 16)
+            
             # Base has ~2 second block times, so ~43200 blocks per day
-            blocks_back = days_back * 43200
+            # Convert float days to blocks
+            blocks_per_day = 43200
+            blocks_back = int(days_back * blocks_per_day)  # Convert to int here
+            
             start_block = max(0, current_block - blocks_back)
+            
+            print(f"   Block range: {start_block} to {current_block} ({blocks_back} blocks = {days_back:.2f} days)")
             
             return hex(start_block), hex(current_block)
         except Exception as e:
             print(f"Error calculating block range: {e}")
-            return "0x0", "0x0"
-    
+            return "0x0", "0x0" 
+        
     def is_interesting_token(self, token_symbol: str) -> bool:
         """Check if token is interesting for alpha discovery on Base"""
         if not token_symbol:

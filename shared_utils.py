@@ -143,8 +143,8 @@ class BaseTracker:
         except Exception as e:
             print(f"Alchemy API error: {e}")
             return {}
-    
-    def get_recent_block_range(self, days_back: int = 7) -> tuple:
+
+    def get_recent_block_range(self, days_back: float = 7) -> tuple:
         """Get block range for recent days"""
         try:
             current_block_result = self.make_alchemy_request("eth_blockNumber", [])
@@ -152,13 +152,17 @@ class BaseTracker:
                 return "0x0", "0x0"
                 
             current_block = int(current_block_result["result"], 16)
-            blocks_back = days_back * 7200  # ~7200 blocks per day
+            
+            # ~7200 blocks per day on Ethereum (12 second blocks)
+            blocks_per_day = 7200
+            blocks_back = int(days_back * blocks_per_day)  
+            
             start_block = max(0, current_block - blocks_back)
             
             return hex(start_block), hex(current_block)
         except Exception as e:
             print(f"Error calculating block range: {e}")
-            return "0x0", "0x0"
+            return "0x0", "0x0"                
     
     def is_interesting_token(self, token_symbol: str) -> bool:
         """Check if token is interesting for alpha discovery (not excluded)"""

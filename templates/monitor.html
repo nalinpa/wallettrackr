@@ -1,0 +1,861 @@
+<style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0f0f23 0%, #1a1a3e 50%, #2d1b69 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 30px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3);
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            margin-bottom: 10px;
+        }
+
+        .card {
+            background: linear-gradient(145deg, #1e1e3a, #2a2a5a);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 1rem;
+            margin: 5px;
+            transition: all 0.3s ease;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn.stop {
+            background: linear-gradient(135deg, #f44336, #e91e63);
+        }
+
+        .btn.secondary {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        #console-output {
+            background: #0a0a0a;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 20px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+            max-height: 500px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .console-line {
+            margin-bottom: 5px;
+            padding: 2px 0;
+        }
+
+        .success { color: #4caf50; }
+        .error { color: #f44336; }
+        .info { color: #2196f3; }
+        .warning { color: #ff9800; }
+
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #757575;
+            margin-right: 10px;
+        }
+
+        .status-indicator.active {
+            background: #4caf50;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { 
+                box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.7);
+            }
+            50% { 
+                box-shadow: 0 0 0 10px rgba(76, 175, 80, 0);
+            }
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .info-item {
+            padding: 15px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+        }
+
+        .info-label {
+            font-size: 0.85rem;
+            color: #9e9e9e;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+        }
+
+        .info-value {
+            font-size: 1.2rem;
+            color: #4fc3f7;
+            font-weight: 600;
+        }
+
+        .config-select, .config-input {
+            width: 100%;
+            padding: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+            color: white;
+            font-size: 1rem;
+            margin-top: 5px;
+        }
+
+        .config-input {
+            width: 100px;
+        }
+
+        .nav-bar {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .nav-bar a {
+            color: #4fc3f7;
+            text-decoration: none;
+            margin: 0 15px;
+            font-weight: 600;
+        }
+
+        .nav-bar a:hover {
+            text-decoration: underline;
+        }
+
+        .alert-item {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 8px;
+            border-left: 4px solid #4caf50;
+        }
+
+        .alert-item.surge {
+            border-left-color: #ff9800;
+        }
+
+        .alert-token {
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #ffa726;
+            margin-bottom: 8px;
+        }
+
+        .alert-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin-top: 10px;
+            font-size: 0.9rem;
+        }
+
+        .alert-detail {
+            color: #b0b0b0;
+        }
+
+        .alert-detail strong {
+            color: #4fc3f7;
+        }
+
+        .alert-contract {
+            font-family: 'Courier New', monospace;
+            font-size: 0.85rem;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 8px;
+            border-radius: 4px;
+            margin-top: 10px;
+            word-break: break-all;
+        }<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crypto Alpha Monitor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0f0f23 0%, #1a1a3e 50%, #2d1b69 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 30px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3);
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            margin-bottom: 10px;
+        }
+
+        .card {
+            background: linear-gradient(145deg, #1e1e3a, #2a2a5a);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 1rem;
+            margin: 5px;
+            transition: all 0.3s ease;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn.stop {
+            background: linear-gradient(135deg, #f44336, #e91e63);
+        }
+
+        .btn.secondary {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        #console-output {
+            background: #0a0a0a;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 20px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+            max-height: 500px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .console-line {
+            margin-bottom: 5px;
+            padding: 2px 0;
+        }
+
+        .success { color: #4caf50; }
+        .error { color: #f44336; }
+        .info { color: #2196f3; }
+        .warning { color: #ff9800; }
+
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #757575;
+            margin-right: 10px;
+        }
+
+        .status-indicator.active {
+            background: #4caf50;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { 
+                box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.7);
+            }
+            50% { 
+                box-shadow: 0 0 0 10px rgba(76, 175, 80, 0);
+            }
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .info-item {
+            padding: 15px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+        }
+
+        .info-label {
+            font-size: 0.85rem;
+            color: #9e9e9e;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+        }
+
+        .info-value {
+            font-size: 1.2rem;
+            color: #4fc3f7;
+            font-weight: 600;
+        }
+
+        .nav-bar {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .nav-bar a {
+            color: #4fc3f7;
+            text-decoration: none;
+            margin: 0 15px;
+            font-weight: 600;
+        }
+
+        .nav-bar a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 Crypto Alpha Monitor</h1>
+            <p>Automated token tracking system</p>
+        </div>
+
+        <div class="nav-bar">
+            <a href="/">📊 Dashboard</a>
+            <a href="/monitor">🤖 Monitor</a>
+        </div>
+
+        <div class="card">
+            <h2>Monitor Control</h2>
+            
+            <div style="margin: 20px 0;">
+                <span class="status-indicator" id="status-indicator"></span>
+                <span id="status-text">Loading...</span>
+            </div>
+
+            <div>
+                <button class="btn" id="start-btn" onclick="startMonitor()">
+                    ▶️ Start Monitor
+                </button>
+                <button class="btn stop" id="stop-btn" onclick="stopMonitor()" style="display: none;">
+                    ⏹️ Stop Monitor
+                </button>
+                <button class="btn secondary" onclick="checkNow()">
+                    🔍 Check Now
+                </button>
+                <button class="btn secondary" onclick="testConnection()">
+                    🧪 Test Connection
+                </button>
+                <button class="btn secondary" onclick="clearConsole()">
+                    🗑️ Clear Console
+                </button>
+            </div>
+
+            <div class="info-grid">
+                <div class="info-item">
+                    <div class="info-label">Last Check</div>
+                    <div class="info-value" id="last-check">Never</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Next Check</div>
+                    <div class="info-value" id="next-check">-</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Status</div>
+                    <div class="info-value" id="monitor-status">Inactive</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Console Output</h2>
+            <div id="console-output">
+                <div class="console-line info">Monitor console ready. Click "Check Now" to run a check.</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Configuration</h2>
+            
+            <div class="info-grid">
+                <div class="info-item">
+                    <div class="info-label">Check Interval (minutes)</div>
+                    <select id="interval-select" class="config-select" onchange="updateConfig()">
+                        <option value="5">5 minutes</option>
+                        <option value="15">15 minutes</option>
+                        <option value="30">30 minutes</option>
+                        <option value="60" selected>1 hour</option>
+                        <option value="120">2 hours</option>
+                        <option value="240">4 hours</option>
+                    </select>
+                </div>
+                
+                <div class="info-item">
+                    <div class="info-label">Networks</div>
+                    <div>
+                        <label><input type="checkbox" id="network-eth" onchange="updateConfig()"> Ethereum</label><br>
+                        <label><input type="checkbox" id="network-base" checked onchange="updateConfig()"> Base</label>
+                    </div>
+                </div>
+                
+                <div class="info-item">
+                    <div class="info-label">Wallets to Check</div>
+                    <input type="number" id="num-wallets" value="50" min="5" max="174" class="config-input" onchange="updateConfig()">
+                </div>
+                
+                <div class="info-item">
+                    <div class="info-label">Min Wallets for Alert</div>
+                    <input type="number" id="min-wallets" value="2" min="1" max="20" class="config-input" onchange="updateThresholds()">
+                </div>
+                
+                <div class="info-item">
+                    <div class="info-label">Min ETH Spent</div>
+                    <input type="number" id="min-eth" value="0.5" step="0.1" min="0.1" class="config-input" onchange="updateThresholds()">
+                </div>
+                
+                <div class="info-item">
+                    <div class="info-label">Min Alpha Score</div>
+                    <input type="number" id="min-score" value="30" min="10" max="100" class="config-input" onchange="updateThresholds()">
+                </div>
+            </div>
+            
+            <div style="margin-top: 20px;">
+                <label>
+                    <input type="checkbox" id="use-interval-timeframe" checked onchange="updateConfig()">
+                    Only check new activity since last check (recommended)
+                </label>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Recent Alerts</h2>
+            <div id="alerts-container">
+                <p>No alerts yet.</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let isMonitorRunning = false;
+
+        // Add console logging for debugging
+        function log(message, type = 'info') {
+            console.log(`[Monitor] ${message}`);
+            const output = document.getElementById('console-output');
+            const line = document.createElement('div');
+            line.className = `console-line ${type}`;
+            const timestamp = new Date().toLocaleTimeString();
+            line.textContent = `[${timestamp}] ${message}`;
+            output.appendChild(line);
+            output.scrollTop = output.scrollHeight;
+        }
+
+        function clearConsole() {
+            document.getElementById('console-output').innerHTML = '<div class="console-line info">Console cleared.</div>';
+        }
+
+        // Load monitor status on page load
+        window.addEventListener('DOMContentLoaded', function() {
+            log('Page loaded, checking monitor status...');
+            loadStatus();
+        });
+
+        window.addEventListener('beforeunload', function() {
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
+        });
+
+        function loadStatus() {
+            log('Loading monitor status...');
+            
+            fetch('/api/monitor/status')
+                .then(response => {
+                    log(`Status response: ${response.status}`);
+                    return response.json();
+                })
+                .then(data => {
+                    log(`Monitor running: ${data.is_running}`, 'success');
+                    updateUI(data);
+                })
+                .catch(error => {
+                    log(`Error loading status: ${error}`, 'error');
+                    console.error('Full error:', error);
+                });
+        }
+
+        function updateUI(status) {
+            const indicator = document.getElementById('status-indicator');
+            const statusText = document.getElementById('status-text');
+            const startBtn = document.getElementById('start-btn');
+            const stopBtn = document.getElementById('stop-btn');
+            
+            isMonitorRunning = status.is_running;
+            
+            if (isMonitorRunning) {
+                indicator.classList.add('active');
+                statusText.textContent = 'Monitor Active';
+                document.getElementById('monitor-status').textContent = 'Active';
+                startBtn.style.display = 'none';
+                stopBtn.style.display = 'inline-block';
+            } else {
+                indicator.classList.remove('active');
+                statusText.textContent = 'Monitor Inactive';
+                document.getElementById('monitor-status').textContent = 'Inactive';
+                startBtn.style.display = 'inline-block';
+                stopBtn.style.display = 'none';
+            }
+            
+            if (status.last_check) {
+                document.getElementById('last-check').textContent = new Date(status.last_check).toLocaleTimeString();
+            }
+            
+            if (status.next_check && isMonitorRunning) {
+                document.getElementById('next-check').textContent = new Date(status.next_check).toLocaleTimeString();
+            } else {
+                document.getElementById('next-check').textContent = '-';
+            }
+        }
+
+        function startMonitor() {
+            log('Starting monitor...', 'info');
+            
+            fetch('/api/monitor/start', { 
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => {
+                log(`Start response: ${response.status}`);
+                return response.json();
+            })
+            .then(data => {
+                log(`Monitor started: ${data.message}`, data.status === 'success' ? 'success' : 'error');
+                loadStatus();
+            })
+            .catch(error => {
+                log(`Error starting monitor: ${error}`, 'error');
+                console.error('Full error:', error);
+            });
+        }
+
+        function stopMonitor() {
+            log('Stopping monitor...', 'info');
+            
+            fetch('/api/monitor/stop', { 
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => {
+                log(`Stop response: ${response.status}`);
+                return response.json();
+            })
+            .then(data => {
+                log(`Monitor stopped: ${data.message}`, data.status === 'success' ? 'success' : 'error');
+                loadStatus();
+            })
+            .catch(error => {
+                log(`Error stopping monitor: ${error}`, 'error');
+                console.error('Full error:', error);
+            });
+        }
+
+        function checkNow() {
+            log('🔍 Running immediate check...', 'warning');
+            log('Check server console for detailed output', 'info');
+            
+            fetch('/api/monitor/check-now', { 
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => {
+                log(`Check response: ${response.status}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                log(`Check initiated: ${data.message}`, data.status === 'success' ? 'success' : 'error');
+                
+                // Load alerts after a delay
+                setTimeout(() => {
+                    log('Loading alerts...');
+                    loadAlerts();
+                }, 5000);
+            })
+            .catch(error => {
+                log(`Error running check: ${error}`, 'error');
+                console.error('Full error:', error);
+            });
+        }
+
+        function testConnection() {
+            log('Testing monitor connection...', 'info');
+            
+            fetch('/api/monitor/test')
+                .then(response => {
+                    log(`Test response: ${response.status}`);
+                    return response.json();
+                })
+                .then(data => {
+                    log(`Test result: ${JSON.stringify(data)}`, 'success');
+                })
+                .catch(error => {
+                    log(`Test failed: ${error}`, 'error');
+                    console.error('Full error:', error);
+                });
+        }
+
+        function updateConfig() {
+            const networks = [];
+            if (document.getElementById('network-eth').checked) networks.push('eth');
+            if (document.getElementById('network-base').checked) networks.push('base');
+            
+            const config = {
+                check_interval_minutes: parseInt(document.getElementById('interval-select').value),
+                networks: networks,
+                num_wallets: parseInt(document.getElementById('num-wallets').value),
+                use_interval_for_timeframe: document.getElementById('use-interval-timeframe').checked
+            };
+            
+            log(`Updating config: ${JSON.stringify(config)}`, 'info');
+            
+            fetch('/api/monitor/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(config)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    log('Configuration updated successfully', 'success');
+                    loadStatus();
+                } else {
+                    log(`Config update failed: ${data.message}`, 'error');
+                }
+            })
+            .catch(error => {
+                log(`Error updating config: ${error}`, 'error');
+            });
+        }
+
+        function updateThresholds() {
+            const thresholds = {
+                min_wallets: parseInt(document.getElementById('min-wallets').value),
+                min_eth_spent: parseFloat(document.getElementById('min-eth').value),
+                min_alpha_score: parseFloat(document.getElementById('min-score').value)
+            };
+            
+            log(`Updating thresholds: ${JSON.stringify(thresholds)}`, 'info');
+            
+            fetch('/api/monitor/thresholds', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(thresholds)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    log('Thresholds updated successfully', 'success');
+                } else {
+                    log(`Threshold update failed: ${data.message}`, 'error');
+                }
+            })
+            .catch(error => {
+                log(`Error updating thresholds: ${error}`, 'error');
+            });
+        }
+
+        function loadAlerts() {
+            fetch('/api/monitor/alerts?limit=20')
+                .then(response => response.json())
+                .then(alerts => {
+                    const container = document.getElementById('alerts-container');
+                    
+                    if (alerts.length === 0) {
+                        container.innerHTML = '<p>No alerts yet.</p>';
+                        log('No alerts found');
+                    } else {
+                        log(`Found ${alerts.length} alerts`, 'success');
+                        
+                        let html = '';
+                        alerts.reverse().forEach(alert => {  // Show newest first
+                            const alertClass = alert.alert_type === 'surge' ? 'surge' : '';
+                            const alertEmoji = alert.alert_type === 'new' ? '🆕' : '📈';
+                            const networkBadge = alert.network ? `[${alert.network.toUpperCase()}]` : '';
+                            
+                            html += `
+                                <div class="alert-item ${alertClass}">
+                                    <div class="alert-token">
+                                        ${alertEmoji} ${alert.token} ${networkBadge}
+                                    </div>
+                                    <div class="alert-details">
+                                        <div class="alert-detail">
+                                            💰 <strong>${alert.total_eth_spent.toFixed(3)} ETH</strong>
+                                        </div>
+                                        <div class="alert-detail">
+                                            👥 <strong>${alert.wallet_count} wallets</strong>
+                                        </div>
+                                        <div class="alert-detail">
+                                            📊 Score: <strong>${alert.alpha_score.toFixed(0)}</strong>
+                                        </div>
+                                        <div class="alert-detail">
+                                            🏪 ${alert.platforms.slice(0, 2).join(', ')}
+                                        </div>
+                                    </div>
+                                    <div class="alert-contract">
+                                        📋 ${alert.contract_address}
+                                    </div>
+                                    <div style="margin-top: 8px; font-size: 0.85rem; color: #757575;">
+                                        🕐 ${new Date(alert.first_seen).toLocaleString()}
+                                    </div>
+                                </div>
+                            `;
+                        });
+                        
+                        container.innerHTML = html;
+                    }
+                })
+                .catch(error => {
+                    log(`Error loading alerts: ${error}`, 'error');
+                });
+        }
+
+        function closeConsole() {
+            document.getElementById('overlay').classList.remove('active');
+            document.getElementById('console-dialog').classList.remove('active');
+            
+            // Make sure to close any active SSE connection
+            if (eventSource) {
+                console.log('Closing SSE connection from closeConsole');
+                eventSource.close();
+                eventSource = null;
+            }
+        }
+
+        // Update loadStatus to populate config fields
+        function loadStatus() {
+            log('Loading monitor status...');
+            
+            fetch('/api/monitor/status')
+                .then(response => {
+                    log(`Status response: ${response.status}`);
+                    return response.json();
+                })
+                .then(data => {
+                    log(`Monitor running: ${data.is_running}`, 'success');
+                    updateUI(data);
+                    
+                    // Update config fields
+                    if (data.config) {
+                        document.getElementById('interval-select').value = data.config.check_interval_minutes || 60;
+                        document.getElementById('num-wallets').value = data.config.num_wallets || 50;
+                        document.getElementById('use-interval-timeframe').checked = data.config.use_interval_for_timeframe !== false;
+                        
+                        // Update network checkboxes
+                        document.getElementById('network-eth').checked = data.config.networks && data.config.networks.includes('eth');
+                        document.getElementById('network-base').checked = data.config.networks && data.config.networks.includes('base');
+                    }
+                    
+                    // Update thresholds
+                    if (data.alert_thresholds) {
+                        document.getElementById('min-wallets').value = data.alert_thresholds.min_wallets || 2;
+                        document.getElementById('min-eth').value = data.alert_thresholds.min_eth_spent || 0.5;
+                        document.getElementById('min-score').value = data.alert_thresholds.min_alpha_score || 30;
+                    }
+                    
+                    // Load alerts
+                    loadAlerts();
+                })
+                .catch(error => {
+                    log(`Error loading status: ${error}`, 'error');
+                    console.error('Full error:', error);
+                });
+        }
+
+        // Auto-refresh status every 30 seconds
+        setInterval(() => {
+            if (isMonitorRunning) {
+                loadStatus();
+            }
+        }, 30000);
+    </script>
+</body>
+</html>
