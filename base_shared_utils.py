@@ -10,6 +10,9 @@ from typing import List, Dict
 import traceback
 import sys
 from io import StringIO
+import ssl
+import os
+import certifi
 
 load_dotenv()
 
@@ -125,7 +128,33 @@ class BaseTracker:
     """Base class with shared functionality for Base network trackers"""
     
     def __init__(self):
-        self.mongo_client = pymongo.MongoClient(MONGO_URI)
+        mongo_uri = os.getenv('MONGO_URI', 'mongodb://localhost:27017')
+        
+        # Create SSL context for MongoDB Atlas
+        if os.getenv('FLASK_ENV') == 'production':
+            # Production SSL configuration
+            self.mongo_client = pymongo.MongoClient(
+                mongo_uri,
+                tls=True,
+                tlsCAFile=certifi.where(), 
+                serverSelectionTimeoutMS=60000,
+                connectTimeoutMS=60000,
+                socketTimeoutMS=60000,
+                retryWrites=True,
+                maxPoolSize=10
+            )
+        else:
+            # Development connection
+            self.mongo_client = pymongo.MongoClient(mongo_uri)
+        
+        # Test connection
+        try:
+            self.mongo_client.admin.command('ping')
+            print(f"✅ MongoDB connected successfully")
+        except Exception as e:
+            print(f"❌ MongoDB connection failed: {e}")
+            raise
+            
         self.db = self.mongo_client[DB_NAME]
         self.wallets_collection = self.db[WALLETS_COLLECTION]
         
