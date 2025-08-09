@@ -1,8 +1,3 @@
-"""
-Enhanced Automated Token Monitoring System
-Tracks only new purchases since last check
-"""
-
 import schedule
 import time
 import threading
@@ -15,27 +10,35 @@ import requests
 from dataclasses import dataclass, asdict
 from collections import defaultdict
 
+
+
 monitor_bp = Blueprint('monitor', __name__)
 
 @dataclass
 class TokenAlert:
-    """Data class for token alerts"""
+    """Enhanced data class for token alerts with trading links"""
     token: str
     wallet_count: int
     total_eth_spent: float
     platforms: List[str]
     contract_address: str
     first_seen: datetime
-    alert_type: str  # 'new' or 'surge'
+    alert_type: str
     alpha_score: float = 0.0
     network: str = 'base'
     
     def to_dict(self):
+        # Generate trading links
+        uniswap_url = f"https://app.uniswap.org/#/swap?outputCurrency={self.contract_address}&chain={self.network}"
+        dexscreener_url = f"https://dexscreener.com/{self.network}/{self.contract_address}"
+        
         return {
             **asdict(self),
-            'first_seen': self.first_seen.isoformat()
+            'first_seen': self.first_seen.isoformat(),
+            'uniswap_url': uniswap_url,
+            'dexscreener_url': dexscreener_url
         }
-
+        
 class TokenMonitor:
     """Automated monitoring system for smart wallet activity"""
     

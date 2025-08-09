@@ -116,7 +116,7 @@ def generate_sse_stream(network, analysis_type, message_queue):
                 results = analyzer.analyze_all_sell_methods(num_wallets=174, days_back=1)
             elif network == 'base' and analysis_type == 'buy':
                 analyzer = BaseComprehensiveTracker()
-                results = analyzer.analyze_all_trading_methods(num_wallets=24, days_back=1)
+                results = analyzer.analyze_all_trading_methods(num_wallets=174, days_back=1)
             elif network == 'base' and analysis_type == 'sell':
                 analyzer = BaseComprehensiveSellTracker()
                 results = analyzer.analyze_all_sell_methods(num_wallets=174, days_back=1)
@@ -669,4 +669,64 @@ def test_monitor():
             'status': 'error',
             'message': f'Monitor test failed: {str(e)}',
             'results': test_results
+        }), 500
+        
+@api_bp.route('/token/<contract_address>')
+def get_token_details(contract_address):
+    """Get detailed token information"""
+    try:
+        network = request.args.get('network', 'ethereum')
+        
+        print(f"=== TOKEN DETAILS REQUEST ===")
+        print(f"Contract: {contract_address}")
+        print(f"Network: {network}")
+        
+        # Get the appropriate tracker based on network
+        if network == 'base':
+            from base_shared_utils import BaseTracker as NetworkTracker
+        else:
+            from shared_utils import BaseTracker as NetworkTracker
+        
+        tracker = NetworkTracker()
+        
+        # Get token metadata from Alchemy
+        print("1. Getting token metadata...")
+        token_metadata = tracker.get_token_metadata(contract_address)
+        print(f"   Metadata: {token_metadata}")
+        
+        # Get trading activity from our cached data
+        print("2. Getting trading activity...")
+        trading_activity = tracker.get_token_trading_activity(contract_address, network)
+        print(f"   Activity: {trading_activity}")
+        
+        # Get recent purchases
+        print("3. Getting recent purchases...")
+        recent_purchases = tracker.get_recent_token_purchases(contract_address, network)
+        print(f"   Purchases: {len(recent_purchases)} found")
+        
+        response = {
+            'status': 'success',
+            'contract_address': contract_address,
+            'network': network,
+            'metadata': token_metadata,
+            'activity': trading_activity,
+            'purchases': recent_purchases
+        }
+        
+        print(f"=== RESPONSE ===")
+        print(f"Status: {response['status']}")
+        print(f"Activity wallet count: {trading_activity.get('wallet_count', 0)}")
+        print(f"Activity ETH spent: {trading_activity.get('total_eth_spent', 0)}")
+        print(f"Purchases count: {len(recent_purchases)}")
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        print(f"=== ERROR ===")
+        print(f"Error getting token details: {e}")
+        traceback.print_exc()
+        return jsonify({
+            'status': 'error',
+            'error': str(e),
+            'contract_address': contract_address
         }), 500

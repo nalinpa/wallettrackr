@@ -178,3 +178,52 @@ poetry.toml
 pyrightconfig.json
 
 # End of https://www.toptal.com/developers/gitignore/api/python
+
+
+# Deployment and environment files
+.env.local
+.env.production
+.env.staging
+render.yaml.local
+
+# Backup and migration files
+backup/
+*.dump
+migrations/
+mongo_backup/
+
+# App-specific temporary files
+temp/
+tmp/
+cache/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# API keys and secrets (extra protection)
+*_api_key*
+*_secret*
+*_token*
+secrets.txt
+credentials.json
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Render specific
+.render/

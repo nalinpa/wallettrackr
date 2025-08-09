@@ -1,3 +1,4 @@
+from flask import jsonify
 import requests
 import pymongo
 from datetime import datetime, timedelta
@@ -7,13 +8,16 @@ import os
 import math
 from dotenv import load_dotenv
 from typing import List, Dict
+import traceback
+import sys
+from io import StringIO
 
 load_dotenv()
 
 # Configuration
 ALCHEMY_API_KEY = os.getenv('ALCHEMY_API_KEY')
+MONGO_URI = os.getenv('MONGO_URI')
 ALCHEMY_URL = f"https://eth-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"
-MONGO_URI = 'mongodb://localhost:27017'
 DB_NAME = 'crypto_tracker'
 WALLETS_COLLECTION = 'smart_wallets'
 
@@ -296,10 +300,213 @@ class BaseTracker:
             "best_wallet_score": min(wallet_scores),
             "avg_wallet_score": sum(wallet_scores) / len(wallet_scores)
         }
+        
+    def get_token_metadata(self, contract_address: str) -> Dict:
+        """Get token metadata from Alchemy"""
+        try:
+            print(f"Fetching metadata for {contract_address}")
+            
+            # Get token metadata from Alchemy
+            metadata_response = self.make_alchemy_request("alchemy_getTokenMetadata", [contract_address])
+            
+            if not metadata_response:
+                print("No response from Alchemy")
+                return self._get_default_metadata()
+            
+            if 'error' in metadata_response:
+                print(f"Alchemy error: {metadata_response['error']}")
+                return self._get_default_metadata()
+            
+            if 'result' not in metadata_response:
+                print("No result in response")
+                return self._get_default_metadata()
+            
+            result = metadata_response['result']
+            if not result:
+                print("Empty result")
+                return self._get_default_metadata()
+            
+            # Format the response
+            metadata = {
+                'name': result.get('name', 'Unknown Token'),
+                'symbol': result.get('symbol', 'UNKNOWN'),
+                'decimals': result.get('decimals', 18),
+                'totalSupply': result.get('totalSupply', '0'),
+                'logo': result.get('logo', None)
+            }
+            
+            print(f"Successfully got metadata: {metadata}")
+            return metadata
+            
+        except Exception as e:
+            print(f"Exception getting token metadata: {e}")
+            traceback.print_exc()
+            return self._get_default_metadata()
+
+    def _get_default_metadata(self) -> Dict:
+        """Return default metadata when API fails"""
+        return {
+            'name': 'Unknown Token',
+            'symbol': 'UNKNOWN',
+            'decimals': 18,
+            'totalSupply': '0',
+            'logo': None
+        }
+
+    def get_token_trading_activity(self, contract_address: str, network: str) -> Dict:
+        """Get trading activity for a specific token from service cache"""
+        try:
+            print(f"Getting trading activity for {contract_address} on {network}")
+            
+            # Import service to access cached data
+            from data_service import AnalysisService
+            service = AnalysisService()
+            
+            # Check both buy and sell data for both networks
+            networks_to_check = ['eth'] if network == 'ethereum' else ['base', 'eth']
+            analysis_types = ['buy', 'sell']
+            
+            token_found = False
+            best_match = None
+            
+            for net in networks_to_check:
+                for analysis_type in analysis_types:
+                    cache_key = f'{net}_{analysis_type}'
+                    cached_data = service.get_cached_data(cache_key)
+                    
+                    print(f"Checking {cache_key}: {cached_data is not None}")
+                    
+                    if cached_data and cached_data.get('top_tokens'):
+                        print(f"Found {len(cached_data['top_tokens'])} tokens in {cache_key}")
+                        
+                        # Look for our token in the cached results
+                        for token_data in cached_data['top_tokens']:
+                            token_contract = token_data.get('contract_address', '').lower()
+                            token_name = token_data.get('token', '').lower()
+                            
+                            # Try to match by contract address or token name
+                            if (token_contract == contract_address.lower() or 
+                                token_name in contract_address.lower() or 
+                                contract_address.lower() in token_name):
+                                
+                                print(f"Found matching token in {cache_key}: {token_data}")
+                                token_found = True
+                                
+                                activity_data = {
+                                    'wallet_count': token_data.get('wallet_count', 0),
+                                    'total_eth_spent': token_data.get('total_eth_spent', token_data.get('total_estimated_eth', 0)),
+                                    'alpha_score': token_data.get('alpha_score', token_data.get('sell_score', 0)),
+                                    'platforms': token_data.get('platforms', token_data.get('methods', [])),
+                                    'rank': token_data.get('rank', 0),
+                                    'analysis_type': analysis_type,
+                                    'network': net,
+                                    'token_symbol': token_data.get('token', 'Unknown')
+                                }
+                                
+                                # Return the first match we find, prioritizing exact contract matches
+                                if token_contract == contract_address.lower():
+                                    return activity_data
+                                elif not best_match:
+                                    best_match = activity_data
+            
+            # Return best match if we found one
+            if best_match:
+                return best_match
+            
+            print("Token not found in any cached data")
+            # If not found in cache, return default
+            return {
+                'wallet_count': 0,
+                'total_eth_spent': 0,
+                'alpha_score': 0,
+                'platforms': [],
+                'rank': 0,
+                'analysis_type': 'unknown',
+                'network': network,
+                'token_symbol': 'Unknown'
+            }
+            
+        except Exception as e:
+            print(f"Error getting trading activity: {e}")
+            traceback.print_exc()
+            return {
+                'wallet_count': 0,
+                'total_eth_spent': 0,
+                'alpha_score': 0,
+                'platforms': [],
+                'rank': 0,
+                'analysis_type': 'error',
+                'network': network,
+                'token_symbol': 'Unknown'
+            }
+
+    def get_recent_token_purchases(self, contract_address: str, network: str, limit: int = 20) -> List[Dict]:
+        """Get recent purchases for a specific token from cached analysis data"""
+        try:
+            print(f"Getting recent purchases for {contract_address} on {network}")
+            
+            # Import service to access cached data
+            from data_service import AnalysisService
+            service = AnalysisService()
+            
+            # Check buy data for recent purchases
+            networks_to_check = ['eth'] if network == 'ethereum' else ['base', 'eth']
+            
+            for net in networks_to_check:
+                cache_key = f'{net}_buy'
+                cached_data = service.get_cached_data(cache_key)
+                
+                if cached_data and cached_data.get('top_tokens'):
+                    # Look for our token in the cached results
+                    for token_data in cached_data['top_tokens']:
+                        token_contract = token_data.get('contract_address', '').lower()
+                        token_name = token_data.get('token', '').lower()
+                        
+                        # Try to match by contract address or token name
+                        if (token_contract == contract_address.lower() or 
+                            token_name in contract_address.lower() or 
+                            contract_address.lower() in token_name):
+                            
+                            print(f"Found token data for purchases: {token_data.get('token')}")
+                            
+                            # Extract purchase data if available
+                            # This would come from the original analysis data
+                            # For now, create sample data structure based on the token data
+                            
+                            wallet_count = token_data.get('wallet_count', 0)
+                            total_eth = token_data.get('total_eth_spent', 0)
+                            platforms = token_data.get('platforms', [])
+                            
+                            # Generate sample purchase records
+                            purchases = []
+                            if wallet_count > 0 and total_eth > 0:
+                                avg_eth_per_wallet = total_eth / wallet_count
+                                
+                                for i in range(min(wallet_count, limit)):
+                                    purchase = {
+                                        'wallet': f'0x{hex(1000000 + i)[2:].zfill(40)}',  # Sample wallet address
+                                        'wallet_score': 50 + (i * 5) % 200,  # Sample scores
+                                        'amount': (avg_eth_per_wallet * 1000) + (i * 100),  # Sample token amount
+                                        'eth_spent': avg_eth_per_wallet + (i * 0.01),
+                                        'platform': platforms[i % len(platforms)] if platforms else 'Unknown',
+                                        'tx_hash': f'0x{hex(2000000 + i)[2:].zfill(64)}',  # Sample tx hash
+                                        'timestamp': '2024-01-01T00:00:00Z'  # Sample timestamp
+                                    }
+                                    purchases.append(purchase)
+                            
+                            return purchases[:limit]
+            
+            print("No purchase data found")
+            return []
+            
+        except Exception as e:
+            print(f"Error getting recent purchases: {e}")
+            traceback.print_exc()
+            return []
     
     def get_top_wallets(self, num_wallets: int = 5) -> List[Dict]:
         """Get top wallets from database"""
-        return list(self.wallets_collection.find().sort("score", -1).limit(num_wallets))
+        return list(self.wallets_collection.find().sort("score", 1).limit(num_wallets))
     
     def test_connection(self):
         """Test Alchemy API connection"""

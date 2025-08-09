@@ -1,4 +1,4 @@
-from base_shared_utils import BaseTracker, KNOWN_CONTRACTS, MIN_ETH_VALUE, EXCLUDED_TOKENS, print_header, print_insights, is_base_native_token
+from base_shared_utils import BaseTracker, KNOWN_CONTRACTS, MIN_ETH_VALUE, EXCLUDED_TOKENS
 from typing import List, Dict
 import math
 import time
@@ -164,7 +164,7 @@ class BaseComprehensiveTracker(BaseTracker):
                             eth_spent = sent_usd / 2000  # Convert to ETH equivalent
                         
                         # Check if it's a Base native token for extra scoring
-                        is_base_native = is_base_native_token(token_received)
+                        is_base_native = BaseTracker.is_base_native_token(token_received)
                         
                         purchase = {
                             "transaction_hash": tx_hash,

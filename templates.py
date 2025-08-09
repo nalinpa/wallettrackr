@@ -324,6 +324,19 @@ HTML_TEMPLATE = '''
             color: #ffa726;
         }
 
+        .token-name a {
+            color: inherit;
+            text-decoration: none;
+            transition: all 0.2s ease;
+            border-radius: 4px;
+            padding: 2px 4px;
+        }
+
+        .token-name a:hover {
+            background: rgba(255, 167, 38, 0.1);
+            transform: scale(1.02);
+        }
+
         .token-score {
             background: linear-gradient(135deg, #ff4757, #ff6b7a);
             color: white;
@@ -736,10 +749,41 @@ HTML_TEMPLATE = '''
                     const ethValue = token[valueKey] || 0;
                     const score = token[scoreKey] || 0;
                     
+                    // Create the token details link with additional parameters
+                    const contractAddress = token.contract_address || 'N/A';
+                    
+                    // Create a more comprehensive link with additional data
+                    const linkParams = new URLSearchParams({
+                        token: token.token,
+                        contract: contractAddress,
+                        network: network,
+                        // Add extra data for better matching
+                        wallet_count: token.wallet_count || 0,
+                        eth_spent: ethValue,
+                        alpha_score: score,
+                        platforms: JSON.stringify(platforms.slice(0, 3)),
+                        rank: token.rank || 0
+                    });
+                    
+                    const tokenLink = contractAddress !== 'N/A' 
+                        ? `/token?${linkParams.toString()}`
+                        : '#';
+                    
                     html += `
                         <div class="token-item">
                             <div class="token-header">
-                                <div class="token-name">${nativeFlag}${token.token}</div>
+                                <div class="token-name">
+                                    ${nativeFlag}
+                                    ${contractAddress !== 'N/A' 
+                                        ? `<a target="_blank" href="${tokenLink}" style="color: #ffa726; text-decoration: none; transition: all 0.2s;" 
+                                            onmouseover="this.style.textDecoration='underline'; this.style.color='#ffcc02';" 
+                                            onmouseout="this.style.textDecoration='none'; this.style.color='#ffa726';"
+                                            title="View ${token.token} details">
+                                            ${token.token}
+                                        </a>`
+                                        : token.token
+                                    }
+                                </div>
                                 <div class="token-score">${scoreLabel}: ${score}</div>
                             </div>
                             <div class="token-details">
@@ -762,7 +806,7 @@ HTML_TEMPLATE = '''
                             </div>
                             <div class="detail-item" style="margin-top: 10px;">
                                 <div class="detail-value contract-address">
-                                    ${token.contract_address || 'N/A'}
+                                    ${contractAddress}
                                 </div>
                                 <div class="detail-label">Contract Address</div>
                             </div>
@@ -845,3 +889,479 @@ HTML_TEMPLATE = '''
 </body>
 </html>
 '''
+
+# Add the TOKEN_DETAILS_HTML constant here as well
+TOKEN_DETAILS_HTML = '''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Token Details</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0f0f23 0%, #1a1a3e 50%, #2d1b69 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 30px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3);
+        }
+
+        .token-symbol {
+            font-size: 3rem;
+            font-weight: 800;
+            margin-bottom: 10px;
+        }
+
+        .token-name {
+            font-size: 1.5rem;
+            opacity: 0.9;
+        }
+
+        .card {
+            background: linear-gradient(145deg, #1e1e3a, #2a2a5a);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+        }
+
+        .card-title {
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: #ffa726;
+            margin-bottom: 20px;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+        }
+
+        .info-item {
+            padding: 15px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+        }
+
+        .info-label {
+            font-size: 0.85rem;
+            color: #9e9e9e;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+
+        .info-value {
+            font-size: 1.2rem;
+            color: #4fc3f7;
+            font-weight: 600;
+            word-break: break-all;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            margin: 20px 0;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.3s ease;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn.trade {
+            background: linear-gradient(135deg, #4caf50, #81c784);
+        }
+
+        .btn.chart {
+            background: linear-gradient(135deg, #ff9800, #ffb74d);
+        }
+
+        .btn.etherscan {
+            background: linear-gradient(135deg, #2196f3, #64b5f6);
+        }
+
+        .purchase-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .purchase-item {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 8px;
+            border-left: 3px solid #4fc3f7;
+        }
+
+        .wallet-link {
+            color: #4fc3f7;
+            text-decoration: none;
+            font-family: monospace;
+        }
+
+        .wallet-link:hover {
+            text-decoration: underline;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 50px;
+            font-size: 1.2rem;
+        }
+
+        .back-link {
+            display: inline-block;
+            margin-bottom: 20px;
+            color: #4fc3f7;
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .back-link:hover {
+            text-decoration: underline;
+        }
+
+        .error {
+            background: linear-gradient(135deg, #f44336, #e57373);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+
+        .network-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            margin-left: 10px;
+        }
+
+        .copy-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            margin-left: 10px;
+            color: white;
+        }
+
+        .copy-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/" class="back-link">← Back to Dashboard</a>
+        
+        <div class="header">
+            <div class="token-symbol" id="token-symbol">Loading...</div>
+            <div class="token-name" id="token-name">Getting token information...</div>
+        </div>
+
+        <div class="action-buttons">
+            <a href="#" id="trade-link" class="btn trade" target="_blank">
+                🔄 Trade on Uniswap
+            </a>
+            <a href="#" id="dexscreener-link" class="btn chart" target="_blank">
+                📊 View on DexScreener
+            </a>
+            <a href="#" id="etherscan-link" class="btn etherscan" target="_blank">
+                🔍 View on Explorer
+            </a>
+            <button class="btn copy-btn" onclick="copyAddress()">
+                📋 Copy Address
+            </button>
+        </div>
+
+        <div class="card">
+            <h2 class="card-title">Token Information</h2>
+            <div class="info-grid">
+                <div class="info-item">
+                    <div class="info-label">Contract Address</div>
+                    <div class="info-value" id="contract-address">-</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Network</div>
+                    <div class="info-value" id="network">-</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Decimals</div>
+                    <div class="info-value" id="decimals">-</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Total Supply</div>
+                    <div class="info-value" id="total-supply">-</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2 class="card-title">Trading Activity</h2>
+            <div class="info-grid">
+                <div class="info-item">
+                    <div class="info-label">Smart Wallets Trading</div>
+                    <div class="info-value" id="wallet-count">-</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Total ETH Volume</div>
+                    <div class="info-value" id="eth-spent">-</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Alpha Score</div>
+                    <div class="info-value" id="alpha-score">-</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Main Platform</div>
+                    <div class="info-value" id="main-platform">-</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2 class="card-title">Recent Smart Wallet Activity</h2>
+            <div class="purchase-list" id="purchase-list">
+                <div class="loading">Loading recent activity...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const token = urlParams.get('token');
+        const contract = urlParams.get('contract');
+        const network = urlParams.get('network') || 'ethereum';
+
+        console.log('URL Parameters:', { token, contract, network });
+
+        document.addEventListener('DOMContentLoaded', function() {
+            loadTokenDetails();
+        });
+
+        function loadTokenDetails() {
+            if (!token || !contract) {
+                showError('Invalid token parameters. Please check the URL.');
+                return;
+            }
+
+            // Set basic info immediately
+            document.getElementById('token-symbol').textContent = token;
+            document.getElementById('contract-address').textContent = contract;
+            document.getElementById('network').textContent = network.charAt(0).toUpperCase() + network.slice(1);
+
+            // Set up links
+            setupLinks();
+
+            // Load token details from API
+            const apiUrl = `/api/token/${contract}?network=${network}`;
+            console.log('Fetching from:', apiUrl);
+
+            fetch(apiUrl)
+                .then(response => {
+                    console.log('API Response status:', response.status);
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('API Response data:', data);
+                    
+                    if (data.status === 'error') {
+                        throw new Error(data.error || 'Unknown API error');
+                    }
+                    
+                    updateTokenInfo(data);
+                })
+                .catch(error => {
+                    console.error('Error loading token details:', error);
+                    showError(`Failed to load token details: ${error.message}`);
+                });
+        }
+
+        function updateTokenInfo(data) {
+            // Update metadata
+            if (data.metadata) {
+                const metadata = data.metadata;
+                console.log('Updating metadata:', metadata);
+                
+                if (metadata.name && metadata.name !== 'Unknown Token') {
+                    document.getElementById('token-name').textContent = metadata.name;
+                } else {
+                    document.getElementById('token-name').textContent = `${token} Token`;
+                }
+                
+                document.getElementById('decimals').textContent = metadata.decimals || '18';
+                
+                if (metadata.totalSupply && metadata.totalSupply !== '0') {
+                    const decimals = parseInt(metadata.decimals) || 18;
+                    const supply = parseInt(metadata.totalSupply) / Math.pow(10, decimals);
+                    document.getElementById('total-supply').textContent = formatNumber(supply);
+                } else {
+                    document.getElementById('total-supply').textContent = 'Unknown';
+                }
+            }
+
+            // Update trading activity
+            if (data.activity) {
+                const activity = data.activity;
+                console.log('Updating activity:', activity);
+                
+                document.getElementById('wallet-count').textContent = activity.wallet_count || '0';
+                document.getElementById('eth-spent').textContent = (activity.total_eth_spent || 0).toFixed(4) + ' ETH';
+                document.getElementById('alpha-score').textContent = (activity.alpha_score || 0).toFixed(1);
+                document.getElementById('main-platform').textContent = activity.platforms?.[0] || 'Unknown';
+            }
+
+            // Update purchases
+            if (data.purchases && data.purchases.length > 0) {
+                displayPurchases(data.purchases);
+            } else {
+                document.getElementById('purchase-list').innerHTML = '<p style="text-align: center; color: #757575;">No recent activity data available</p>';
+            }
+        }
+
+        function setupLinks() {
+            const chainId = network === 'base' ? 8453 : 1;
+            const explorerBase = network === 'base' ? 'https://basescan.org' : 'https://etherscan.io';
+            
+            // Uniswap trade link
+            const uniswapUrl = `https://app.uniswap.org/#/swap?outputCurrency=${contract}&chain=${network}`;
+            document.getElementById('trade-link').href = uniswapUrl;
+
+            // DexScreener link
+            const dexScreenerUrl = `https://dexscreener.com/${network}/${contract}`;
+            document.getElementById('dexscreener-link').href = dexScreenerUrl;
+
+            // Explorer link
+            const explorerUrl = `${explorerBase}/token/${contract}`;
+            document.getElementById('etherscan-link').href = explorerUrl;
+            document.getElementById('etherscan-link').innerHTML = network === 'base' ? '🔍 View on BaseScan' : '🔍 View on Etherscan';
+        }
+
+        function displayPurchases(purchases) {
+            const container = document.getElementById('purchase-list');
+            
+            if (purchases.length === 0) {
+                container.innerHTML = '<p style="text-align: center; color: #757575;">No recent purchases found</p>';
+                return;
+            }
+
+            let html = '';
+            purchases.slice(0, 20).forEach(purchase => {
+                const explorerBase = network === 'base' ? 'https://basescan.org' : 'https://etherscan.io';
+                const walletShort = purchase.wallet.slice(0, 6) + '...' + purchase.wallet.slice(-4);
+                
+                html += `
+                    <div class="purchase-item">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                            <a href="${explorerBase}/address/${purchase.wallet}" target="_blank" class="wallet-link">
+                                ${walletShort}
+                            </a>
+                            <span style="color: #757575; font-size: 0.9rem;">
+                                Score: ${purchase.wallet_score}
+                            </span>
+                        </div>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px;">
+                            <div>
+                                <span style="color: #9e9e9e;">Amount:</span>
+                                <strong>${formatNumber(purchase.amount)} ${token}</strong>
+                            </div>
+                            <div>
+                                <span style="color: #9e9e9e;">ETH Spent:</span>
+                                <strong>${purchase.eth_spent.toFixed(4)} ETH</strong>
+                            </div>
+                            <div>
+                                <span style="color: #9e9e9e;">Platform:</span>
+                                <strong>${purchase.platform}</strong>
+                            </div>
+                        </div>
+                        <div style="margin-top: 8px; font-size: 0.85rem; color: #757575;">
+                            <a href="${explorerBase}/tx/${purchase.tx_hash}" target="_blank" style="color: #4fc3f7;">
+                                View Transaction →
+                            </a>
+                        </div>
+                    </div>
+                `;
+            });
+
+            container.innerHTML = html;
+        }
+
+        function showError(message) {
+            document.getElementById('token-symbol').textContent = 'Error';
+            document.getElementById('token-name').textContent = message;
+            
+            const container = document.getElementById('purchase-list');
+            container.innerHTML = `<div class="error">${message}</div>`;
+        }
+
+        function copyAddress() {
+            if (navigator.clipboard) {
+                navigator.clipboard.writeText(contract).then(() => {
+                    alert('Contract address copied to clipboard!');
+                });
+            } else {
+                // Fallback for older browsers
+                const textArea = document.createElement('textarea');
+                textArea.value = contract;
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+                alert('Contract address copied to clipboard!');
+            }
+        }
+
+        function formatNumber(num) {
+            if (num >= 1e9) return (num / 1e9).toFixed(2) + 'B';
+            if (num >= 1e6) return (num / 1e6).toFixed(2) + 'M';
+            if (num >= 1e3) return (num / 1e3).toFixed(2) + 'K';
+            return num.toFixed(2);
+        }
+    </script>
+</body>
+</html>'''

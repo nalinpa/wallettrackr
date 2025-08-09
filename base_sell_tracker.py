@@ -1,4 +1,4 @@
-from base_shared_utils import BaseTracker, KNOWN_CONTRACTS, MIN_ETH_VALUE, EXCLUDED_TOKENS, is_base_native_token
+from base_shared_utils import BaseTracker, KNOWN_CONTRACTS, MIN_ETH_VALUE, EXCLUDED_TOKENS
 from typing import List, Dict
 import math
 import time
@@ -90,7 +90,7 @@ class BaseComprehensiveSellTracker(BaseTracker):
             estimated_eth = estimated_usd / 2000
             
             # Check if it's a Base native token (affects scoring)
-            is_base_native = is_base_native_token(token_sold)
+            is_base_native = BaseTracker.is_base_native_token(token_sold)
             
             # More permissive inclusion criteria for Base
             include_transfer = False
