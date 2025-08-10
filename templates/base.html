@@ -5,6 +5,38 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Crypto Alpha Analysis{% endblock %}</title>
     
+    <!-- PWA Meta Tags -->
+    <meta name="description" content="Real-time smart wallet tracking and alpha token discovery">
+    <meta name="keywords" content="crypto, alpha, tokens, blockchain, ethereum, base, analysis">
+    <meta name="author" content="Crypto Alpha Analysis">
+    
+    <!-- PWA Theme Colors -->
+    <meta name="theme-color" content="#667eea">
+    <meta name="msapplication-TileColor" content="#667eea">
+    <meta name="msapplication-navbutton-color" content="#667eea">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    
+    <!-- PWA App Config -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="CryptoAlpha">
+    <meta name="mobile-web-app-capable" content="yes">
+    
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+    
+    <!-- PWA Icons -->
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='icons/icon-32x32.png') }}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='icons/icon-16x16.png') }}">
+    <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='icons/icon-180x180.png') }}">
+    <link rel="apple-touch-icon" sizes="152x152" href="{{ url_for('static', filename='icons/icon-152x152.png') }}">
+    <link rel="apple-touch-icon" sizes="144x144" href="{{ url_for('static', filename='icons/icon-144x144.png') }}">
+    <link rel="apple-touch-icon" sizes="120x120" href="{{ url_for('static', filename='icons/icon-120x120.png') }}">
+    <link rel="apple-touch-icon" sizes="114x114" href="{{ url_for('static', filename='icons/icon-114x114.png') }}">
+    <link rel="apple-touch-icon" sizes="76x76" href="{{ url_for('static', filename='icons/icon-76x76.png') }}">
+    <link rel="apple-touch-icon" sizes="72x72" href="{{ url_for('static', filename='icons/icon-72x72.png') }}">
+    <link rel="apple-touch-icon" sizes="60x60" href="{{ url_for('static', filename='icons/icon-60x60.png') }}">
+    <link rel="apple-touch-icon" sizes="57x57" href="{{ url_for('static', filename='icons/icon-57x57.png') }}">
+    
     <!-- Bootstrap CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     
@@ -19,6 +51,30 @@
     {% block head %}{% endblock %}
 </head>
 <body class="bg-dark text-light">
+    
+    <!-- PWA Install Banner -->
+    <div id="pwa-install-banner" class="alert alert-info alert-dismissible fade show position-fixed w-100" 
+         style="top: 0; z-index: 9999; display: none;" role="alert">
+        <div class="container-fluid">
+            <div class="d-flex align-items-center">
+                <i class="fas fa-download me-2"></i>
+                <span class="me-auto">Install Crypto Alpha as an app for the best experience!</span>
+                <button type="button" class="btn btn-sm btn-primary me-2" id="pwa-install-btn">
+                    Install
+                </button>
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Offline Indicator -->
+    <div id="offline-indicator" class="alert alert-warning position-fixed w-100" 
+         style="top: 0; z-index: 9998; display: none;" role="alert">
+        <div class="container-fluid text-center">
+            <i class="fas fa-wifi-slash me-2"></i>
+            You're offline. Some features may be limited.
+        </div>
+    </div>
     
     <!-- Navigation -->
     {% include 'components/navbar.html' %}
@@ -51,6 +107,7 @@
             <small class="text-muted">
                 Crypto Alpha Analysis &copy; 2025 | 
                 <span id="current-time">{{ current_time or '' }}</span>
+                <span id="app-version" class="ms-2"></span>
             </small>
         </div>
     </footer>
@@ -70,6 +127,140 @@
     <!-- Custom JavaScript -->
     <script src="{{ url_for('static', filename='js/utils.js') }}"></script>
     <script src="{{ url_for('static', filename='js/navbar.js') }}"></script>
+    
+    <!-- PWA JavaScript -->
+    <script>
+        // PWA Installation and Service Worker
+        let deferredPrompt;
+        let swRegistration;
+
+        // Register Service Worker
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/static/sw.js')
+                    .then((registration) => {
+                        console.log('✅ Service Worker registered:', registration);
+                        swRegistration = registration;
+                        
+                        // Check for updates
+                        registration.addEventListener('updatefound', () => {
+                            const newWorker = registration.installing;
+                            newWorker.addEventListener('statechange', () => {
+                                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                                    // New update available
+                                    showUpdateAvailable();
+                                }
+                            });
+                        });
+                    })
+                    .catch((error) => {
+                        console.log('❌ Service Worker registration failed:', error);
+                    });
+                
+                // Listen for messages from service worker
+                navigator.serviceWorker.addEventListener('message', (event) => {
+                    if (event.data.type === 'DATA_SYNCED') {
+                        showToast('Data synchronized', 'success');
+                    }
+                });
+            });
+        }
+
+        // PWA Install Banner
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            
+            // Show install banner if not already installed
+            if (!window.matchMedia('(display-mode: standalone)').matches) {
+                document.getElementById('pwa-install-banner').style.display = 'block';
+            }
+        });
+
+        // Install button click
+        document.getElementById('pwa-install-btn').addEventListener('click', async () => {
+            if (deferredPrompt) {
+                deferredPrompt.prompt();
+                const { outcome } = await deferredPrompt.userChoice;
+                
+                if (outcome === 'accepted') {
+                    console.log('✅ PWA installed');
+                    document.getElementById('pwa-install-banner').style.display = 'none';
+                }
+                deferredPrompt = null;
+            }
+        });
+
+        // Hide install banner if already installed
+        window.addEventListener('appinstalled', () => {
+            console.log('✅ PWA installed successfully');
+            document.getElementById('pwa-install-banner').style.display = 'none';
+        });
+
+        // Online/Offline Status
+        function updateOnlineStatus() {
+            const offlineIndicator = document.getElementById('offline-indicator');
+            const connectionStatus = document.getElementById('connection-status');
+            
+            if (navigator.onLine) {
+                offlineIndicator.style.display = 'none';
+                if (connectionStatus) {
+                    connectionStatus.className = 'badge bg-success';
+                    connectionStatus.innerHTML = '<i class="fas fa-circle me-1"></i>Online';
+                }
+                
+                // Register background sync when back online
+                if (swRegistration && 'sync' in swRegistration) {
+                    swRegistration.sync.register('background-sync-data');
+                }
+            } else {
+                offlineIndicator.style.display = 'block';
+                if (connectionStatus) {
+                    connectionStatus.className = 'badge bg-warning';
+                    connectionStatus.innerHTML = '<i class="fas fa-circle me-1"></i>Offline';
+                }
+            }
+        }
+
+        window.addEventListener('online', updateOnlineStatus);
+        window.addEventListener('offline', updateOnlineStatus);
+        updateOnlineStatus(); // Initial check
+
+        // Show update available notification
+        function showUpdateAvailable() {
+            const updateHtml = `
+                <div class="toast align-items-center text-white bg-primary border-0" role="alert">
+                    <div class="d-flex">
+                        <div class="toast-body">
+                            <i class="fas fa-download me-2"></i>
+                            App update available!
+                            <button class="btn btn-sm btn-light ms-2" onclick="updateApp()">Update</button>
+                        </div>
+                        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+                    </div>
+                </div>
+            `;
+            
+            const container = document.getElementById('toast-container');
+            container.insertAdjacentHTML('beforeend', updateHtml);
+            
+            const toast = new bootstrap.Toast(container.lastElementChild);
+            toast.show();
+        }
+
+        // Update app
+        function updateApp() {
+            if (swRegistration && swRegistration.waiting) {
+                swRegistration.waiting.postMessage({ type: 'SKIP_WAITING' });
+                window.location.reload();
+            }
+        }
+
+        // Get app version
+        if (swRegistration) {
+            navigator.serviceWorker.controller?.postMessage({ type: 'GET_VERSION' });
+        }
+    </script>
     
     <!-- Page-specific JavaScript -->
     {% block scripts %}{% endblock %}
