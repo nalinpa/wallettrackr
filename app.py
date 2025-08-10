@@ -127,12 +127,14 @@ def logout():
     return redirect(url_for('login'))
 
 @app.route('/')
+@require_password
 def index():
     """Main dashboard page"""
     return render_template_string(HTML_TEMPLATE)
 
 
 @app.route('/token')
+@require_password
 def token_page():
     """Serve the token details page"""
     try:

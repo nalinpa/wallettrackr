@@ -110,7 +110,7 @@ def generate_sse_stream(network, analysis_type, message_queue):
             # Import and run the appropriate analyzer
             if network == 'eth' and analysis_type == 'buy':
                 analyzer = EthComprehensiveTracker()
-                results = analyzer.analyze_all_trading_methods(num_wallets=50, days_back=1)
+                results = analyzer.analyze_all_trading_methods(num_wallets=174, days_back=1)
             elif network == 'eth' and analysis_type == 'sell':
                 analyzer = EthComprehensiveSellTracker()
                 results = analyzer.analyze_all_sell_methods(num_wallets=174, days_back=1)
