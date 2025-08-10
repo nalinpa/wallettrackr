@@ -1,9 +1,4 @@
-"""
-ETH Buy Tracker - buy_tracker.py
-Enhanced ETH mainnet tracker that captures ALL trading methods including bots
-"""
-
-from shared_utils import BaseTracker, KNOWN_CONTRACTS, MIN_ETH_VALUE, EXCLUDED_TOKENS, print_header, print_insights
+from tracker.shared_utils import BaseTracker, KNOWN_CONTRACTS, MIN_ETH_VALUE, EXCLUDED_TOKENS, print_header, print_insights
 from typing import List, Dict
 import math
 import time

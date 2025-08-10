@@ -1,4 +1,4 @@
-from shared_utils import BaseTracker, KNOWN_CONTRACTS, MIN_ETH_VALUE, EXCLUDED_TOKENS, print_header, print_insights
+from tracker.shared_utils import BaseTracker, KNOWN_CONTRACTS, MIN_ETH_VALUE, EXCLUDED_TOKENS, print_header, print_insights
 from typing import List, Dict
 import math
 import time

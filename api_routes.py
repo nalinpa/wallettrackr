@@ -10,11 +10,10 @@ import sys
 from io import StringIO
 
 from auto_monitor import monitor
-from buy_tracker import EthComprehensiveTracker
-from sell_tracker import EthComprehensiveSellTracker
-from base_buy_tracker import BaseComprehensiveTracker
-from base_sell_tracker import BaseComprehensiveSellTracker
-
+from tracker.buy_tracker import EthComprehensiveTracker
+from tracker.sell_tracker import EthComprehensiveSellTracker
+from tracker.base_buy_tracker import BaseComprehensiveTracker
+from tracker.base_sell_tracker import BaseComprehensiveSellTracker
 
 api_bp = Blueprint('api', __name__)
 service = AnalysisService()
@@ -286,7 +285,7 @@ def eth_buy_analysis():
     """ETH mainnet buy analysis"""
     try:
         # Import the ETH buy analyzer
-        from buy_tracker import EthComprehensiveTracker
+        from tracker.buy_tracker import EthComprehensiveTracker
         analyzer = EthComprehensiveTracker()
         
         if not analyzer.test_connection():
@@ -318,7 +317,7 @@ def eth_buy_analysis():
 def eth_sell_analysis():
     """ETH mainnet sell analysis"""
     try:
-        from sell_tracker import EthComprehensiveSellTracker
+        from tracker.sell_tracker import EthComprehensiveSellTracker
         analyzer = EthComprehensiveSellTracker()
         
         if not analyzer.test_connection():
@@ -350,7 +349,7 @@ def eth_sell_analysis():
 def base_buy_analysis():
     """Base network buy analysis"""
     try:
-        from base_buy_tracker import BaseComprehensiveTracker
+        from tracker.base_buy_tracker import BaseComprehensiveTracker
         analyzer = BaseComprehensiveTracker()
         
         if not analyzer.test_connection():
@@ -382,7 +381,7 @@ def base_buy_analysis():
 def base_sell_analysis():
     """Base network sell analysis"""
     try:
-        from base_sell_tracker import BaseComprehensiveSellTracker
+        from tracker.base_sell_tracker import BaseComprehensiveSellTracker
         analyzer = BaseComprehensiveSellTracker()
         
         if not analyzer.test_connection():
@@ -649,12 +648,12 @@ def test_monitor():
             test_results['monitor_module'] = hasattr(monitor, 'get_status')
         
         # Test base tracker
-        from base_buy_tracker import BaseComprehensiveTracker
+        from tracker.base_buy_tracker import BaseComprehensiveTracker
         tracker = BaseComprehensiveTracker()
         test_results['base_tracker'] = hasattr(tracker, 'test_connection')
         
         # Test eth tracker
-        from buy_tracker import EthComprehensiveTracker
+        from tracker.buy_tracker import EthComprehensiveTracker
         tracker = EthComprehensiveTracker()
         test_results['eth_tracker'] = hasattr(tracker, 'test_connection')
         
@@ -682,10 +681,10 @@ def token_details(contract_address):
         
         # Initialize the appropriate tracker based on network
         if network == 'base':
-            from base_shared_utils import BaseTracker, is_base_native_token
+            from tracker.base_shared_utils import BaseTracker, is_base_native_token
             tracker = BaseTracker()
         else:
-            from shared_utils import BaseTracker
+            from tracker.shared_utils import BaseTracker
             tracker = BaseTracker()
             # For ethereum, create a dummy function
             def is_base_native_token(token_symbol):

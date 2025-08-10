@@ -1,8 +1,3 @@
-"""
-Enhanced Automated Token Monitoring System
-Tracks only new purchases since last check
-"""
-
 import schedule
 import time
 import threading
@@ -62,10 +57,7 @@ class TokenMonitor:
         # Notification settings
         self.notification_channels = {
             'console': True,
-            'file': True,
-            'webhook': False,
-            'telegram': True,
-            'discord': False
+            'telegram': True
         }
         
         # Alert thresholds
@@ -195,14 +187,14 @@ class TokenMonitor:
         try:
             # Import and run the appropriate analyzer
             if network == 'eth' and analysis_type == 'buy':
-                from buy_tracker import EthComprehensiveTracker
+                from tracker.buy_tracker import EthComprehensiveTracker
                 analyzer = EthComprehensiveTracker()
                 results = analyzer.analyze_all_trading_methods(
                     num_wallets=self.config['num_wallets'],
                     days_back=days_back  # Use calculated days_back
                 )
             elif network == 'base' and analysis_type == 'buy':
-                from base_buy_tracker import BaseComprehensiveTracker
+                from tracker.base_buy_tracker import BaseComprehensiveTracker
                 analyzer = BaseComprehensiveTracker()
                 results = analyzer.analyze_all_trading_methods(
                     num_wallets=self.config['num_wallets'],
@@ -382,22 +374,10 @@ class TokenMonitor:
         # Console notification
         if self.notification_channels['console']:
             self._console_notification(new_tokens, surge_tokens)
-        
-        # File notification
-        if self.notification_channels['file']:
-            self._file_notification(alerts)
-        
-        # Webhook notification
-        if self.notification_channels['webhook']:
-            self._webhook_notification(alerts)
-        
+            
         # Telegram notification
         if self.notification_channels['telegram']:
             self._telegram_notification(new_tokens, surge_tokens)
-        
-        # Discord notification
-        if self.notification_channels['discord']:
-            self._discord_notification(new_tokens, surge_tokens)
         
         # Store alerts
         self.alerts.extend(alerts)
@@ -466,6 +446,7 @@ class TokenMonitor:
             message += f"\n*SURGE ACTIVITY ({len(surge_tokens)}):*\n"
             for alert in surge_tokens[:5]:  # Top 5
                 message += f"• {alert.token} - {alert.total_eth_spent:.2f}Ξ - Score: {alert.alpha_score:.0f}\n"
+                message += f"  CA: `{alert.contract_address}`\n"
         
         try:
             url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
@@ -480,47 +461,6 @@ class TokenMonitor:
         except Exception as e:
             print(f"❌ Telegram error: {e}")
     
-    def _discord_notification(self, new_tokens: List[TokenAlert], surge_tokens: List[TokenAlert]):
-        """Send alerts to Discord"""
-        webhook_url = os.getenv('DISCORD_WEBHOOK_URL')
-        
-        if not webhook_url:
-            return
-        
-        embeds = []
-        
-        if new_tokens:
-            for alert in new_tokens[:3]:  # Limit to 3 to avoid Discord limits
-                embed = {
-                    'title': f'🆕 New Token: {alert.token}',
-                    'color': 0x00ff00,
-                    'fields': [
-                        {'name': '💰 ETH Spent', 'value': f'{alert.total_eth_spent:.3f} ETH', 'inline': True},
-                        {'name': '👥 Wallets', 'value': str(alert.wallet_count), 'inline': True},
-                        {'name': '📊 Score', 'value': f'{alert.alpha_score:.0f}', 'inline': True},
-                        {'name': '🔗 Contract', 'value': f'```{alert.contract_address}```', 'inline': False},
-                        {'name': '🏪 Platforms', 'value': ', '.join(alert.platforms[:3]), 'inline': False}
-                    ],
-                    'timestamp': datetime.now().isoformat(),
-                    'footer': {'text': f'Network: {alert.network.upper()}'}
-                }
-                embeds.append(embed)
-        
-        if embeds:
-            try:
-                payload = {'embeds': embeds}
-                response = requests.post(webhook_url, json=payload, timeout=10)
-                if response.status_code == 204:
-                    print(f"💬 Discord notification sent")
-            except Exception as e:
-                print(f"❌ Discord error: {e}")
-    
-    def _save_alerts(self):
-        """Save alerts history"""
-        if self.config.get('save_history'):
-            os.makedirs('alerts', exist_ok=True)
-            with open(self.config['alerts_file'], 'w') as f:
-                json.dump([alert.to_dict() for alert in self.alerts[-100:]], f, indent=2)  # Keep last 100
     
     def get_status(self):
         """Get current monitor status"""

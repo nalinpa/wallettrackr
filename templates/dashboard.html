@@ -1,0 +1,505 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Crypto Alpha Analysis{% endblock %}
+
+{% block head %}
+<style>
+    .crypto-card {
+        background: linear-gradient(145deg, #2c3e50, #34495e);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 15px;
+        box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+    }
+    
+    .token-item {
+        background: linear-gradient(135deg, #2c2c54, #3c3c6e);
+        border-radius: 12px;
+        border-left: 4px solid #ff4757;
+        transition: all 0.3s ease;
+    }
+    
+    .token-item:hover {
+        transform: translateX(10px);
+        box-shadow: 0 8px 25px rgba(255, 71, 87, 0.3);
+    }
+    
+    .status-indicator {
+        position: fixed;
+        top: 20px;
+        left: 20px;
+        z-index: 1050;
+    }
+    
+    .console-dialog {
+        max-height: 80vh;
+        overflow: hidden;
+    }
+    
+    .console-content {
+        height: 400px;
+        overflow-y: auto;
+        background: #0a0a0a;
+        font-family: 'Courier New', monospace;
+        font-size: 0.9rem;
+        line-height: 1.6;
+    }
+    
+    .console-line {
+        margin-bottom: 8px;
+        padding: 4px 8px;
+        border-radius: 4px;
+    }
+    
+    .console-line.info { color: #4fc3f7; }
+    .console-line.success { color: #66bb6a; }
+    .console-line.warning { color: #ffa726; }
+    .console-line.error { color: #ef5350; }
+    .console-line.highlight { color: #ab47bc; font-weight: bold; }
+    
+    .platform-tag {
+        font-size: 0.75rem;
+        margin: 0 2px;
+    }
+    
+    .native-flag {
+        font-size: 1.2rem;
+        margin-right: 8px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="status-indicator">
+    <span id="status-indicator" class="badge bg-success">
+        <i class="fas fa-circle me-1"></i>Online
+    </span>
+</div>
+
+<!-- Control Buttons -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="crypto-card p-3">
+            <div class="d-flex flex-wrap justify-content-center gap-2">
+                <button class="btn btn-primary active" onclick="loadData('eth', 'buy')">
+                    <i class="fab fa-ethereum me-2"></i>ETH Buys
+                </button>
+                <button class="btn btn-outline-primary" onclick="loadData('eth', 'sell')">
+                    <i class="fab fa-ethereum me-2"></i>ETH Sells
+                </button>
+                <button class="btn btn-info" onclick="loadData('base', 'buy')">
+                    <i class="fas fa-layer-group me-2"></i>Base Buys
+                </button>
+                <button class="btn btn-outline-info" onclick="loadData('base', 'sell')">
+                    <i class="fas fa-layer-group me-2"></i>Base Sells
+                </button>
+                <button class="btn btn-warning" onclick="refreshAll()">
+                    <i class="fas fa-sync me-2"></i>Refresh All
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Stats Cards -->
+<div class="row mb-4" id="stats-container">
+    <div class="col-lg-3 col-md-6 mb-3">
+        <div class="crypto-card p-3 text-center">
+            <div class="display-4 text-warning mb-2" id="total-activity">-</div>
+            <h6 class="text-muted text-uppercase">Total Activity</h6>
+        </div>
+    </div>
+    <div class="col-lg-3 col-md-6 mb-3">
+        <div class="crypto-card p-3 text-center">
+            <div class="display-4 text-info mb-2" id="unique-tokens">-</div>
+            <h6 class="text-muted text-uppercase">Unique Tokens</h6>
+        </div>
+    </div>
+    <div class="col-lg-3 col-md-6 mb-3">
+        <div class="crypto-card p-3 text-center">
+            <div class="display-4 text-success mb-2" id="total-value">-</div>
+            <h6 class="text-muted text-uppercase">Total Value (ETH)</h6>
+        </div>
+    </div>
+    <div class="col-lg-3 col-md-6 mb-3">
+        <div class="crypto-card p-3 text-center">
+            <div class="h5 text-primary mb-2" id="last-updated">-</div>
+            <h6 class="text-muted text-uppercase">Last Updated</h6>
+        </div>
+    </div>
+</div>
+
+<!-- Main Content Area -->
+<div class="row">
+    <div class="col-12">
+        <div id="content-container">
+            <div class="crypto-card p-4 text-center">
+                <i class="fas fa-rocket fa-3x text-primary mb-3"></i>
+                <h4>Ready to analyze...</h4>
+                <p class="text-muted">Select an analysis type above to get started</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Console Output Modal -->
+<div class="modal fade" id="consoleModal" tabindex="-1" aria-labelledby="consoleModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content bg-dark border-secondary">
+            <div class="modal-header bg-primary">
+                <h5 class="modal-title" id="consoleModalLabel">
+                    <div class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></div>
+                    Analysis Console Output
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-0">
+                <div class="console-content p-3" id="console-content">
+                    <!-- Console output will be added here -->
+                </div>
+            </div>
+            <div class="modal-footer bg-secondary">
+                <div class="progress flex-grow-1 me-3">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                         role="progressbar" 
+                         id="progress-fill" 
+                         style="width: 0%">
+                    </div>
+                </div>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentNetwork = 'eth';
+let currentType = 'buy';
+let eventSource = null;
+let consoleModal;
+
+document.addEventListener('DOMContentLoaded', function() {
+    consoleModal = new bootstrap.Modal(document.getElementById('consoleModal'));
+});
+
+function showConsole() {
+    document.getElementById('console-content').innerHTML = '';
+    document.getElementById('progress-fill').style.width = '0%';
+    consoleModal.show();
+}
+
+function closeConsole() {
+    consoleModal.hide();
+    if (eventSource) {
+        console.log('Closing SSE connection');
+        eventSource.close();
+        eventSource = null;
+    }
+}
+
+function addConsoleOutput(message, type = 'info') {
+    const consoleContent = document.getElementById('console-content');
+    const line = document.createElement('div');
+    line.className = `console-line ${type}`;
+    
+    const timestamp = new Date().toLocaleTimeString();
+    line.innerHTML = `<span class="text-muted me-2">[${timestamp}]</span>${message}`;
+    
+    consoleContent.appendChild(line);
+    consoleContent.scrollTop = consoleContent.scrollHeight;
+}
+
+function updateProgress(percentage) {
+    document.getElementById('progress-fill').style.width = percentage + '%';
+}
+
+function updateStatus(status, message) {
+    const indicator = document.getElementById('status-indicator');
+    indicator.className = `badge bg-${status === 'loading' ? 'warning' : status === 'error' ? 'danger' : 'success'}`;
+    indicator.innerHTML = `<i class="fas fa-circle me-1"></i>${message}`;
+}
+
+function loadData(network, type) {
+    currentNetwork = network;
+    currentType = type;
+    
+    // Update button states
+    document.querySelectorAll('.btn').forEach(btn => btn.classList.remove('active'));
+    if (event && event.target) {
+        event.target.classList.add('active');
+    }
+    
+    // Show console and loading
+    showConsole();
+    document.getElementById('content-container').innerHTML = `
+        <div class="crypto-card p-4 text-center">
+            <div class="spinner-border text-primary mb-3" role="status"></div>
+            <h4>Analyzing ${network.toUpperCase()} ${type} data...</h4>
+        </div>
+    `;
+    updateStatus('loading', 'Loading...');
+    
+    // Add initial console output
+    addConsoleOutput(`<span class="me-2">🚀</span> Starting ${network.toUpperCase()} ${type} analysis...`, 'highlight');
+    
+    // Close any existing SSE connection
+    if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+    }
+    
+    // SSE connection logic (same as before)
+    if (typeof(EventSource) !== "undefined") {
+        const streamUrl = `/api/${network}/${type}/stream`;
+        console.log('Connecting to SSE:', streamUrl);
+        
+        eventSource = new EventSource(streamUrl);
+        
+        let hasReceivedData = false;
+        let isComplete = false;
+        
+        eventSource.onmessage = function(event) {
+            hasReceivedData = true;
+            try {
+                const data = JSON.parse(event.data);
+                
+                if (data.type === 'console') {
+                    addConsoleOutput(data.message, data.level || 'info');
+                } else if (data.type === 'progress') {
+                    updateProgress(data.percentage);
+                } else if (data.type === 'results') {
+                    addConsoleOutput('📊 Processing results data...', 'success');
+                    displayResultData(data.data, currentNetwork, currentType);
+                } else if (data.type === 'complete' || data.type === 'final_complete') {
+                    if (!isComplete) {
+                        isComplete = true;
+                        eventSource.close();
+                        eventSource = null;
+                        addConsoleOutput('✅ Analysis complete!', 'success');
+                        
+                        setTimeout(() => {
+                            closeConsole();
+                            updateStatus('success', 'Online');
+                        }, 1500);
+                    }
+                }
+            } catch (error) {
+                console.error('Error parsing SSE data:', error);
+                addConsoleOutput(`❌ Error: ${error.message}`, 'error');
+                updateStatus('error', 'Error');
+            }
+        };
+        
+        eventSource.onerror = function(error) {
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
+            
+            if (!hasReceivedData && !isComplete) {
+                addConsoleOutput('❌ Error: Unable to connect to SSE stream. Please try again later.', 'error');
+            }
+        };
+    }
+}
+
+function displayResultData(data, network, type) {
+    // Update stats
+    if (type === 'buy') {
+        document.getElementById('total-activity').textContent = data.total_purchases || 0;
+        document.getElementById('total-value').textContent = (data.total_eth_spent || 0).toFixed(4);
+    } else {
+        document.getElementById('total-activity').textContent = data.total_sells || 0;
+        document.getElementById('total-value').textContent = (data.total_estimated_eth || 0).toFixed(4);
+    }
+    
+    document.getElementById('unique-tokens').textContent = data.unique_tokens || 0;
+    document.getElementById('last-updated').textContent = data.last_updated ? 
+        new Date(data.last_updated).toLocaleTimeString() : new Date().toLocaleTimeString();
+
+    // Build content
+    let html = '';
+    
+    if (!data.top_tokens || data.top_tokens.length === 0) {
+        html = `
+            <div class="crypto-card p-4 text-center">
+                <i class="fas fa-info-circle fa-3x text-info mb-3"></i>
+                <h4>No Significant Activity Found</h4>
+                <p class="text-muted">${data.message || 'No tokens met the criteria for display'}</p>
+            </div>
+        `;
+    } else {
+        const networkName = network.toUpperCase();
+        const typeName = type === 'buy' ? 'Alpha Tokens' : 'Sell Pressure';
+        const scoreLabel = type === 'buy' ? 'Alpha Score' : 'Sell Score';
+        
+        html = `
+            <div class="crypto-card p-4">
+                <h3 class="mb-4">
+                    <i class="fas fa-trophy text-warning me-2"></i>
+                    Top ${networkName} ${typeName}
+                </h3>
+                <div class="row g-3">
+        `;
+        
+        data.top_tokens.forEach(token => {
+            const nativeFlag = token.is_base_native ? '<span class="native-flag">🔵</span>' : '';
+            const valueKey = type === 'buy' ? 'total_eth_spent' : 'total_estimated_eth';
+            const scoreKey = type === 'buy' ? 'alpha_score' : 'sell_score';
+            
+            const platforms = token.platforms || token.methods || [];
+            const platformTags = platforms.slice(0, 3).map(p => 
+                `<span class="badge bg-secondary platform-tag">${p}</span>`
+            ).join('');
+            
+            const ethValue = token[valueKey] || 0;
+            const score = token[scoreKey] || 0;
+            
+            const contractAddress = token.contract_address || '';
+            const tokenSymbol = token.token || '';
+            const detailsUrl = `/token?contract=${encodeURIComponent(contractAddress)}&token=${encodeURIComponent(tokenSymbol)}&network=${network}`;
+            
+            html += `
+                <div class="col-12 mb-3">
+                    <div class="token-item p-3">
+                        <div class="d-flex justify-content-between align-items-start mb-3">
+                            <div>
+                                <h5 class="mb-1 text-warning" style="cursor: pointer;" onclick="window.open('${detailsUrl}', '_blank')">
+                                    ${nativeFlag}${token.token}
+                                    <small class="text-muted ms-2"><i class="fas fa-external-link-alt"></i> View Details</small>
+                                </h5>
+                                <div class="small text-muted">Rank #${token.rank}</div>
+                            </div>
+                            <span class="badge bg-primary fs-6">${scoreLabel}: ${score}</span>
+                        </div>
+                        
+                        <div class="row g-2 mb-3">
+                            <div class="col-md-3 col-6">
+                                <div class="text-center p-2 bg-dark rounded">
+                                    <div class="h6 text-info mb-0">${token.wallet_count || 0}</div>
+                                    <small class="text-muted">Wallets</small>
+                                </div>
+                            </div>
+                            <div class="col-md-3 col-6">
+                                <div class="text-center p-2 bg-dark rounded">
+                                    <div class="h6 text-success mb-0">${ethValue.toFixed(4)}</div>
+                                    <small class="text-muted">ETH Value</small>
+                                </div>
+                            </div>
+                            <div class="col-md-3 col-6">
+                                <div class="text-center p-2 bg-dark rounded">
+                                    <div class="h6 text-primary mb-0">${token.avg_wallet_score || 0}</div>
+                                    <small class="text-muted">Avg Score</small>
+                                </div>
+                            </div>
+                            <div class="col-md-3 col-6">
+                                <div class="text-center p-2 bg-dark rounded">
+                                    <button class="btn btn-sm btn-outline-light" onclick="copyToClipboard('${contractAddress}')">
+                                        <i class="fas fa-copy"></i> Copy
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-2">
+                            <small class="text-muted d-block mb-1">Contract Address:</small>
+                            <code class="text-light small">${contractAddress || 'N/A'}</code>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <small class="text-muted d-block mb-1">Platforms:</small>
+                            ${platformTags}
+                        </div>
+                        
+                        <div class="d-flex gap-2">
+                            <a href="${detailsUrl}" target="_blank" class="btn btn-sm btn-primary">
+                                <i class="fas fa-search me-1"></i> View Details
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            `;
+        });
+        
+        html += '</div></div>';
+    }
+    
+    document.getElementById('content-container').innerHTML = html;
+}
+
+function refreshAll() {
+    loadData(currentNetwork, currentType);
+}
+
+function copyToClipboard(text) {
+    navigator.clipboard.writeText(text).then(() => {
+        // Show toast notification
+        const toast = document.createElement('div');
+        toast.className = 'toast align-items-center text-white bg-success border-0 position-fixed';
+        toast.style.cssText = 'top: 20px; right: 20px; z-index: 9999;';
+        toast.innerHTML = `
+            <div class="d-flex">
+                <div class="toast-body">
+                    <i class="fas fa-check me-2"></i>Address copied to clipboard!
+                </div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+            </div>
+        `;
+        document.body.appendChild(toast);
+        
+        const bsToast = new bootstrap.Toast(toast);
+        bsToast.show();
+        
+        setTimeout(() => {
+            document.body.removeChild(toast);
+        }, 3000);
+    }).catch(err => {
+        console.error('Failed to copy: ', err);
+        alert('Failed to copy address');
+    });
+}
+
+// Keyboard shortcuts
+document.addEventListener('keydown', function(e) {
+    if (e.ctrlKey || e.metaKey) {
+        switch(e.key) {
+            case '1':
+                e.preventDefault();
+                loadData('eth', 'buy');
+                break;
+            case '2':
+                e.preventDefault();
+                loadData('eth', 'sell');
+                break;
+            case '3':
+                e.preventDefault();
+                loadData('base', 'buy');
+                break;
+            case '4':
+                e.preventDefault();
+                loadData('base', 'sell');
+                break;
+            case 'r':
+                e.preventDefault();
+                refreshAll();
+                break;
+        }
+    }
+});
+
+// Close console on ESC key
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        closeConsole();
+    }
+});
+
+window.addEventListener('beforeunload', function() {
+    if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+    }
+});
+</script>
+{% endblock %}
