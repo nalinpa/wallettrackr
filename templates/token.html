@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Token Details</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0f0f23 0%, #1a1a3e 50%, #2d1b69 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 30px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3);
+        }
+
+        .token-symbol {
+            font-size: 3rem;
+            font-weight: 800;
+            margin-bottom: 10px;
+        }
+
+        .token-name {
+            font-size: 1.5rem;
+            opacity: 0.9;
+        }
+
+        .card {
+            background: linear-gradient(145deg, #1e1e3a, #2a2a5a);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+        }
+
+        .card-title {
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: #ffa726;
+            margin-bottom: 20px;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+        }
+
+        .info-item {
+            padding: 15px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+        }
+
+        .info-label {
+            font-size: 0.85rem;
+            color: #9e9e9e;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+
+        .info-value {
+            font-size: 1.2rem;
+            color: #4fc3f7;
+            font-weight: 600;
+            word-break: break-all;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            margin: 20px 0;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.3s ease;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn.trade {
+            background: linear-gradient(135deg, #4caf50, #81c784);
+        }
+
+        .btn.chart {
+            background: linear-gradient(135deg, #ff9800, #ffb74d);
+        }
+
+        .btn.etherscan {
+            background: linear-gradient(135deg, #2196f3, #64b5f6);
+        }
+
+        .purchase-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .purchase-item {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 8px;
+            border-left: 3px solid #4fc3f7;
+        }
+
+        .wallet-link {
+            color: #4fc3f7;
+            text-decoration: none;
+            font-family: monospace;
+        }
+
+        .wallet-link:hover {
+            text-decoration: underline;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 50px;
+            font-size: 1.2rem;
+        }
+
+        .back-link {
+            display: inline-block;
+            margin-bottom: 20px;
+            color: #4fc3f7;
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .back-link:hover {
+            text-decoration: underline;
+        }
+
+        .price-chart {
+            width: 100%;
+            height: 400px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #757575;
+        }
+
+        .copy-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            margin-left: 10px;
+        }
+
+        .copy-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .network-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            margin-left: 10px;
+        }
+
+        .native-badge {
+            background: linear-gradient(135deg, #4caf50, #81c784);
+        }
+
+        .error {
+            background: linear-gradient(135deg, #e74c3c, #c0392b);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+            text-align: center;
+        }
+
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .stat-card {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .stat-value {
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: #ffa726;
+            margin-bottom: 8px;
+        }
+
+        .stat-label {
+            font-size: 0.9rem;
+            color: #b0b0b0;
+            text-transform: uppercase;
+        }
+
+        .sell-pressure {
+            border-left-color: #ff4757;
+        }
+
+        .sell-pressure .stat-value {
+            color: #ff4757;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/" class="back-link">← Back to Dashboard</a>
+        
+        <div class="header">
+            <div class="token-symbol" id="token-symbol">Loading...</div>
+            <div class="token-name" id="token-name"></div>
+            <div id="network-badge" class="network-badge"></div>
+        </div>
+
+        <div class="action-buttons">
+            <a href="#" id="trade-link" class="btn trade" target="_blank">
+                🔄 Trade on Uniswap
+            </a>
+            <a href="#" id="dexscreener-link" class="btn chart" target="_blank">
+                📊 View on DexScreener
+            </a>
+            <a href="#" id="etherscan-link" class="btn etherscan" target="_blank">
+                🔍 View on Explorer
+            </a>
+            <button class="btn" onclick="copyAddress()">
+                📋 Copy Address
+            </button>
+        </div>
+
+        <div class="card">
+            <h2 class="card-title">Token Information</h2>
+            <div class="info-grid">
+                <div class="info-item">
+                    <div class="info-label">Contract Address</div>
+                    <div class="info-value" id="contract-address">-</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Network</div>
+                    <div class="info-value" id="network">-</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Decimals</div>
+                    <div class="info-value" id="decimals">-</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Total Supply</div>
+                    <div class="info-value" id="total-supply">-</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="stats-row">
+            <div class="stat-card">
+                <div class="stat-value" id="alpha-score">-</div>
+                <div class="stat-label">Alpha Score</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="wallet-count">-</div>
+                <div class="stat-label">Smart Wallets</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="eth-spent">-</div>
+                <div class="stat-label">Total ETH Spent</div>
+            </div>
+            <div class="stat-card sell-pressure">
+                <div class="stat-value" id="sell-score">-</div>
+                <div class="stat-label">Sell Pressure</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2 class="card-title">Trading Activity</h2>
+            <div class="info-grid">
+                <div class="info-item">
+                    <div class="info-label">Main Platforms</div>
+                    <div class="info-value" id="main-platforms">-</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Last Updated</div>
+                    <div class="info-value" id="last-updated">-</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Token Type</div>
+                    <div class="info-value" id="token-type">-</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Sell Methods</div>
+                    <div class="info-value" id="sell-methods">-</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2 class="card-title">Recent Smart Wallet Activity</h2>
+            <div class="purchase-list" id="purchase-list">
+                <div class="loading">Loading activity...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const token = urlParams.get('token');
+        const contract = urlParams.get('contract');
+        const network = urlParams.get('network') || 'ethereum';
+
+        document.addEventListener('DOMContentLoaded', function() {
+            loadTokenDetails();
+        });
+
+        function loadTokenDetails() {
+            if (!token && !contract) {
+                showError('No token or contract address specified');
+                return;
+            }
+
+            const contractAddress = contract || token;
+            
+            // Set basic loading state
+            document.getElementById('token-symbol').textContent = contractAddress.slice(0, 10) + '...';
+            document.getElementById('network-badge').textContent = network.toUpperCase();
+            
+            // Set up links immediately
+            setupLinks(contractAddress);
+
+            // Load token data from API
+            fetch(`/api/token/${contractAddress}?network=${network}`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.error) {
+                        throw new Error(data.error);
+                    }
+                    displayTokenData(data);
+                })
+                .catch(error => {
+                    console.error('Error loading token details:', error);
+                    showError(error.message);
+                });
+        }
+
+        function displayTokenData(data) {
+            console.log('Token data:', data);
+            
+            // Basic token info
+            if (data.metadata) {
+                const symbol = data.metadata.symbol || 'Unknown';
+                const name = data.metadata.name || 'Unknown Token';
+                
+                document.getElementById('token-symbol').textContent = symbol;
+                document.getElementById('token-name').textContent = name;
+                document.getElementById('decimals').textContent = data.metadata.decimals || '18';
+                
+                if (data.metadata.totalSupply) {
+                    const supply = parseInt(data.metadata.totalSupply) / Math.pow(10, data.metadata.decimals || 18);
+                    document.getElementById('total-supply').textContent = formatNumber(supply);
+                }
+            }
+            
+            // Contract and network info
+            document.getElementById('contract-address').textContent = data.contract_address;
+            document.getElementById('network').textContent = (data.network || 'ethereum').charAt(0).toUpperCase() + (data.network || 'ethereum').slice(1);
+            
+            // Network badge styling
+            const networkBadge = document.getElementById('network-badge');
+            if (data.network === 'base') {
+                networkBadge.classList.add('native-badge');
+            }
+            if (data.is_base_native) {
+                networkBadge.textContent += ' 🔵 Native';
+            }
+            
+            // Activity data
+            if (data.activity) {
+                document.getElementById('wallet-count').textContent = data.activity.wallet_count || '0';
+                document.getElementById('eth-spent').textContent = (data.activity.total_eth_spent || 0).toFixed(4) + ' ETH';
+                document.getElementById('alpha-score').textContent = (data.activity.alpha_score || 0).toFixed(1);
+                
+                const platforms = data.activity.platforms || [];
+                document.getElementById('main-platforms').textContent = platforms.slice(0, 3).join(', ') || '-';
+            }
+            
+            // Sell pressure data
+            if (data.sell_pressure) {
+                document.getElementById('sell-score').textContent = (data.sell_pressure.sell_score || 0).toFixed(1);
+                
+                const methods = data.sell_pressure.methods || [];
+                document.getElementById('sell-methods').textContent = methods.slice(0, 3).join(', ') || '-';
+            }
+            
+            // Token type
+            document.getElementById('token-type').textContent = data.is_base_native ? 'Base Native 🔵' : 'Standard Token';
+            
+            // Last updated
+            if (data.last_updated) {
+                document.getElementById('last-updated').textContent = new Date(data.last_updated).toLocaleString();
+            }
+            
+            // Display purchases
+            displayPurchases(data.purchases || [], data.network);
+        }
+
+        function setupLinks(contractAddress) {
+            const network = urlParams.get('network') || 'ethereum';
+            const chainId = network === 'base' ? 8453 : 1;
+            const explorerBase = network === 'base' ? 'https://basescan.org' : 'https://etherscan.io';
+            
+            // Uniswap trade link
+            const uniswapUrl = `https://app.uniswap.org/#/swap?outputCurrency=${contractAddress}&chain=${network}`;
+            document.getElementById('trade-link').href = uniswapUrl;
+
+            // DexScreener link
+            const dexScreenerUrl = `https://dexscreener.com/${network}/${contractAddress}`;
+            document.getElementById('dexscreener-link').href = dexScreenerUrl;
+
+            // Explorer link
+            const explorerUrl = `${explorerBase}/token/${contractAddress}`;
+            document.getElementById('etherscan-link').href = explorerUrl;
+            document.getElementById('etherscan-link').innerHTML = network === 'base' ? '🔍 View on BaseScan' : '🔍 View on Etherscan';
+        }
+
+        function displayPurchases(purchases, network) {
+            const container = document.getElementById('purchase-list');
+            
+            if (purchases.length === 0) {
+                container.innerHTML = '<p style="text-align: center; color: #757575;">No recent purchase data available</p>';
+                return;
+            }
+
+            let html = '';
+            const explorerBase = network === 'base' ? 'https://basescan.org' : 'https://etherscan.io';
+            
+            purchases.slice(0, 20).forEach(purchase => {
+                const walletShort = purchase.wallet.slice(0, 6) + '...' + purchase.wallet.slice(-4);
+                
+                html += `
+                    <div class="purchase-item">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                            <a href="${explorerBase}/address/${purchase.wallet}" target="_blank" class="wallet-link">
+                                ${walletShort}
+                            </a>
+                            <span style="color: #757575; font-size: 0.9rem;">
+                                Score: ${purchase.wallet_score || '-'}
+                            </span>
+                        </div>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px;">
+                            <div>
+                                <span style="color: #9e9e9e;">Amount:</span>
+                                <strong>${formatNumber(purchase.amount || 0)}</strong>
+                            </div>
+                            <div>
+                                <span style="color: #9e9e9e;">ETH Spent:</span>
+                                <strong>${(purchase.eth_spent || 0).toFixed(4)} ETH</strong>
+                            </div>
+                            <div>
+                                <span style="color: #9e9e9e;">Platform:</span>
+                                <strong>${purchase.platform || 'Unknown'}</strong>
+                            </div>
+                        </div>
+                        ${purchase.tx_hash ? `
+                        <div style="margin-top: 8px; font-size: 0.85rem; color: #757575;">
+                            <a href="${explorerBase}/tx/${purchase.tx_hash}" target="_blank" style="color: #4fc3f7;">
+                                View Transaction →
+                            </a>
+                        </div>
+                        ` : ''}
+                    </div>
+                `;
+            });
+
+            container.innerHTML = html;
+        }
+
+        function showError(message) {
+            document.getElementById('token-symbol').textContent = 'Error';
+            document.getElementById('token-name').textContent = message;
+            
+            const container = document.getElementById('purchase-list');
+            container.innerHTML = `
+                <div class="error">
+                    <h3>Error Loading Token Data</h3>
+                    <p>${message}</p>
+                    <p><a href="/" style="color: white;">← Back to Dashboard</a></p>
+                </div>
+            `;
+        }
+
+        function copyAddress() {
+            const address = urlParams.get('contract') || urlParams.get('token');
+            if (address) {
+                navigator.clipboard.writeText(address).then(() => {
+                    alert('Contract address copied to clipboard!');
+                }).catch(err => {
+                    console.error('Failed to copy: ', err);
+                });
+            }
+        }
+
+        function formatNumber(num) {
+            if (num >= 1e9) return (num / 1e9).toFixed(2) + 'B';
+            if (num >= 1e6) return (num / 1e6).toFixed(2) + 'M';
+            if (num >= 1e3) return (num / 1e3).toFixed(2) + 'K';
+            return num.toFixed(2);
+        }
+    </script>
+</body>
+</html>

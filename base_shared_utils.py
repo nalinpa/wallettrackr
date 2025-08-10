@@ -330,7 +330,7 @@ class BaseTracker:
     
     def get_top_wallets(self, num_wallets: int = 5) -> List[Dict]:
         """Get top wallets from Base database"""
-        return list(self.wallets_collection.find().sort("score", -1).limit(num_wallets))
+        return list(self.wallets_collection.find().sort("score", 1).limit(num_wallets))
     
     def test_connection(self):
         """Test Alchemy API connection to Base"""

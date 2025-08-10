@@ -110,13 +110,13 @@ def generate_sse_stream(network, analysis_type, message_queue):
             # Import and run the appropriate analyzer
             if network == 'eth' and analysis_type == 'buy':
                 analyzer = EthComprehensiveTracker()
-                results = analyzer.analyze_all_trading_methods(num_wallets=174, days_back=1)
+                results = analyzer.analyze_all_trading_methods(num_wallets=50, days_back=1)
             elif network == 'eth' and analysis_type == 'sell':
                 analyzer = EthComprehensiveSellTracker()
                 results = analyzer.analyze_all_sell_methods(num_wallets=174, days_back=1)
             elif network == 'base' and analysis_type == 'buy':
                 analyzer = BaseComprehensiveTracker()
-                results = analyzer.analyze_all_trading_methods(num_wallets=24, days_back=1)
+                results = analyzer.analyze_all_trading_methods(num_wallets=174, days_back=1)
             elif network == 'base' and analysis_type == 'sell':
                 analyzer = BaseComprehensiveSellTracker()
                 results = analyzer.analyze_all_sell_methods(num_wallets=174, days_back=1)
@@ -669,4 +669,124 @@ def test_monitor():
             'status': 'error',
             'message': f'Monitor test failed: {str(e)}',
             'results': test_results
+        }), 500
+        
+@api_bp.route('/token/<contract_address>')
+def token_details(contract_address):
+    """Get detailed token information using shared utilities"""
+    try:
+        from datetime import datetime
+        import os
+        
+        network = request.args.get('network', 'ethereum')
+        
+        # Initialize the appropriate tracker based on network
+        if network == 'base':
+            from base_shared_utils import BaseTracker, is_base_native_token
+            tracker = BaseTracker()
+        else:
+            from shared_utils import BaseTracker
+            tracker = BaseTracker()
+            # For ethereum, create a dummy function
+            def is_base_native_token(token_symbol):
+                return False
+        
+        # Get token metadata using tracker's Alchemy connection
+        metadata_result = tracker.make_alchemy_request("alchemy_getTokenMetadata", [contract_address])
+        
+        metadata = {}
+        if metadata_result.get('result'):
+            result = metadata_result['result']
+            metadata = {
+                'name': result.get('name'),
+                'symbol': result.get('symbol'), 
+                'decimals': result.get('decimals'),
+                'totalSupply': result.get('totalSupply'),
+                'logo': result.get('logo')
+            }
+        
+        # Get recent activity from our cached data
+        activity = {}
+        purchases = []
+        
+        # Check both buy and sell cache for this token
+        cache_key_buy = f'{network}_buy'
+        cache_key_sell = f'{network}_sell'
+        
+        cached_buy_data = service.get_cached_data(cache_key_buy)
+        cached_sell_data = service.get_cached_data(cache_key_sell)
+        
+        # Search for token in buy data
+        token_symbol = metadata.get('symbol', '').upper()
+        
+        if cached_buy_data and cached_buy_data.get('top_tokens'):
+            for token_data in cached_buy_data['top_tokens']:
+                if (token_data.get('contract_address', '').lower() == contract_address.lower() or 
+                    token_data.get('token', '').upper() == token_symbol):
+                    
+                    activity = {
+                        'wallet_count': token_data.get('wallet_count', 0),
+                        'total_eth_spent': token_data.get('total_eth_spent', 0),
+                        'alpha_score': token_data.get('alpha_score', 0),
+                        'platforms': token_data.get('platforms', [])
+                    }
+                    break
+        
+        # Get sell pressure data if available
+        sell_pressure = {}
+        if cached_sell_data and cached_sell_data.get('top_tokens'):
+            for token_data in cached_sell_data['top_tokens']:
+                if (token_data.get('contract_address', '').lower() == contract_address.lower() or 
+                    token_data.get('token', '').upper() == token_symbol):
+                    
+                    sell_pressure = {
+                        'wallet_count': token_data.get('wallet_count', 0),
+                        'total_estimated_eth': token_data.get('total_estimated_eth', 0),
+                        'sell_score': token_data.get('sell_score', 0),
+                        'methods': token_data.get('methods', [])
+                    }
+                    break
+        
+        # Generate mock recent purchases for demonstration
+        # In a real implementation, you'd store purchase details during analysis
+        if activity.get('wallet_count', 0) > 0:
+            # Create sample purchases based on activity data
+            platforms = activity.get('platforms', ['Unknown'])
+            wallet_count = activity['wallet_count']
+            total_eth = activity.get('total_eth_spent', 0)
+            
+            for i in range(min(wallet_count, 10)):  # Show up to 10 purchases
+                purchases.append({
+                    'wallet': f'0x{hex(0x1000000000000000000000000000000000000000 + i)[2:].zfill(40)}',
+                    'amount': (total_eth / wallet_count) * (1 + (i * 0.1)),  # Vary amounts
+                    'eth_spent': total_eth / wallet_count,
+                    'platform': platforms[i % len(platforms)],
+                    'tx_hash': f'0x{hex(0x2000000000000000000000000000000000000000000000000000000000000000 + i)[2:].zfill(64)}',
+                    'wallet_score': 150 - (i * 10)  # Mock scores
+                })
+        
+        # Determine if it's a Base native token
+        is_base_native = False
+        if network == 'base' and token_symbol:
+            is_base_native = is_base_native_token(token_symbol)
+        
+        return jsonify({
+            'contract_address': contract_address,
+            'network': network,
+            'metadata': metadata,
+            'activity': activity,
+            'sell_pressure': sell_pressure,
+            'purchases': purchases,
+            'is_base_native': is_base_native,
+            'last_updated': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        print(f"Error in token_details: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'error': f'Failed to get token details: {str(e)}',
+            'contract_address': contract_address,
+            'network': network
         }), 500

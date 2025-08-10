@@ -430,6 +430,83 @@ HTML_TEMPLATE = '''
             background: linear-gradient(135deg, #ff4757, #ff6b7a);
             color: white;
         }
+        
+        .token-item {
+            background: linear-gradient(135deg, #2c2c54, #3c3c6e);
+            padding: 20px;
+            border-radius: 12px;
+            border-left: 4px solid #ff4757;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+
+        .token-item:hover {
+            transform: translateX(10px);
+            box-shadow: 0 8px 25px rgba(255, 71, 87, 0.3);
+        }
+
+        .token-name {
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: #ffa726;
+            transition: color 0.3s ease;
+        }
+
+        .token-name:hover {
+            color: #4fc3f7;
+        }
+
+        .contract-address {
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 8px;
+            border-radius: 6px;
+            word-break: break-all;
+            transition: background 0.3s ease;
+        }
+
+        .contract-address:hover {
+            background: rgba(79, 195, 247, 0.1);
+            color: #4fc3f7;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: inline-block;
+            text-decoration: none;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
+            text-decoration: none;
+            color: white;
+        }
+
+        /* Responsive improvements */
+        @media (max-width: 768px) {
+            .token-item:hover {
+                transform: none; /* Disable transform on mobile */
+            }
+            
+            .token-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 10px;
+            }
+            
+            .token-details {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
 
         @media (max-width: 768px) {
             .header h1 {
@@ -736,10 +813,18 @@ HTML_TEMPLATE = '''
                     const ethValue = token[valueKey] || 0;
                     const score = token[scoreKey] || 0;
                     
+                    // Create token details link
+                    const contractAddress = token.contract_address || '';
+                    const tokenSymbol = token.token || '';
+                    const detailsUrl = `/token?contract=${encodeURIComponent(contractAddress)}&token=${encodeURIComponent(tokenSymbol)}&network=${network}`;
+                    
                     html += `
                         <div class="token-item">
                             <div class="token-header">
-                                <div class="token-name">${nativeFlag}${token.token}</div>
+                                <div class="token-name" style="cursor: pointer;" onclick="window.open('${detailsUrl}', '_blank')">
+                                    ${nativeFlag}${token.token} 
+                                    <span style="font-size: 0.8rem; color: #757575; margin-left: 10px;">📋 Click for details</span>
+                                </div>
                                 <div class="token-score">${scoreLabel}: ${score}</div>
                             </div>
                             <div class="token-details">
@@ -761,13 +846,19 @@ HTML_TEMPLATE = '''
                                 </div>
                             </div>
                             <div class="detail-item" style="margin-top: 10px;">
-                                <div class="detail-value contract-address">
-                                    ${token.contract_address || 'N/A'}
+                                <div class="detail-value contract-address" style="cursor: pointer;" onclick="copyToClipboard('${contractAddress}')">
+                                    ${contractAddress || 'N/A'}
+                                    <span style="font-size: 0.7rem; margin-left: 8px;">📋</span>
                                 </div>
-                                <div class="detail-label">Contract Address</div>
+                                <div class="detail-label">Contract Address (Click to copy)</div>
                             </div>
                             <div class="platform-tags">
                                 ${platformTags}
+                            </div>
+                            <div style="margin-top: 15px;">
+                                <a href="${detailsUrl}" target="_blank" class="btn" style="padding: 8px 16px; font-size: 0.85rem; text-decoration: none;">
+                                    🔍 View Token Details
+                                </a>
                             </div>
                         </div>
                     `;
@@ -834,6 +925,34 @@ HTML_TEMPLATE = '''
                 }
             }
         });
+        
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                // Show temporary feedback
+                const notification = document.createElement('div');
+                notification.style.cssText = `
+                    position: fixed;
+                    top: 20px;
+                    right: 20px;
+                    background: linear-gradient(135deg, #4caf50, #81c784);
+                    color: white;
+                    padding: 12px 20px;
+                    border-radius: 8px;
+                    font-weight: 600;
+                    z-index: 10000;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+                `;
+                notification.textContent = '📋 Address copied to clipboard!';
+                document.body.appendChild(notification);
+                
+                setTimeout(() => {
+                    document.body.removeChild(notification);
+                }, 2000);
+            }).catch(err => {
+                console.error('Failed to copy: ', err);
+                alert('Failed to copy address');
+            });
+        }
 
         // Close console on ESC key
         document.addEventListener('keydown', function(e) {
