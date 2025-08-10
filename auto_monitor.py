@@ -82,8 +82,7 @@ class TokenMonitor:
             'num_wallets': 50,  # Reduced for faster checks
             'use_interval_for_timeframe': True,  # New: use check interval for timeframe
             'save_history': True,
-            'history_file': 'alerts/token_history.json',
-            'alerts_file': 'alerts/alerts.json'
+            'history_file': 'alerts/token_history.json'
         }
     
     def save_config(self):
@@ -401,30 +400,6 @@ class TokenMonitor:
                 print(f"     💰 {alert.total_eth_spent:.4f} ETH from {alert.wallet_count} wallets")
                 print(f"     📊 Alpha Score: {alert.alpha_score:.1f}")
     
-    def _file_notification(self, alerts: List[TokenAlert]):
-        """Save alerts to file"""
-        os.makedirs('alerts', exist_ok=True)
-        filename = f"alerts/alerts_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        with open(filename, 'w') as f:
-            json.dump([alert.to_dict() for alert in alerts], f, indent=2)
-        print(f"📁 Alerts saved to {filename}")
-    
-    def _webhook_notification(self, alerts: List[TokenAlert]):
-        """Send alerts to webhook"""
-        webhook_url = os.getenv('MONITOR_WEBHOOK_URL')
-        if not webhook_url:
-            return
-        
-        try:
-            payload = {
-                'timestamp': datetime.now().isoformat(),
-                'alerts': [alert.to_dict() for alert in alerts]
-            }
-            response = requests.post(webhook_url, json=payload, timeout=10)
-            if response.status_code == 200:
-                print(f"📤 Webhook notification sent")
-        except Exception as e:
-            print(f"❌ Webhook error: {e}")
     
     def _telegram_notification(self, new_tokens: List[TokenAlert], surge_tokens: List[TokenAlert]):
         """Send alerts to Telegram"""

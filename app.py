@@ -1,6 +1,6 @@
 from datetime import datetime
 from functools import wraps
-from flask import Flask, jsonify, request, session, redirect, url_for, render_template, flash
+from flask import Flask, jsonify, render_template_string, request, send_from_directory, session, redirect, url_for, render_template, flash
 from flask_cors import CORS
 from api_routes import api_bp
 from auto_monitor import monitor_bp
@@ -94,6 +94,80 @@ def api_status():
             "/api/base/sell/stream"
         ]
     }
+    
+@app.route('/static/<path:filename>')
+def static_files(filename):
+    """Serve static files"""
+    return send_from_directory('static', filename)
+
+@app.route('/manifest.json')
+def manifest():
+    """Serve PWA manifest"""
+    return send_from_directory('static', 'manifest.json', mimetype='application/json')
+
+@app.route('/sw.js')
+def service_worker():
+    """Serve service worker from root"""
+    return send_from_directory('static', 'sw.js', mimetype='application/javascript')
+
+@app.route('/pwa.js')
+def pwa_script():
+    """Serve PWA script from root"""
+    return send_from_directory('static', 'pwa.js', mimetype='application/javascript')
+
+# Add offline fallback route
+@app.route('/offline')
+def offline():
+    """Offline fallback page"""
+    return render_template_string('''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Crypto Alpha - Offline</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                background: linear-gradient(135deg, #0f0f23 0%, #1a1a3e 50%, #2d1b69 100%);
+                color: white;
+                text-align: center;
+                padding: 50px 20px;
+                margin: 0;
+                min-height: 100vh;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                align-items: center;
+            }
+            .offline-content {
+                max-width: 400px;
+                background: rgba(255,255,255,0.1);
+                padding: 40px;
+                border-radius: 15px;
+                backdrop-filter: blur(10px);
+            }
+            h1 { margin-bottom: 20px; }
+            p { margin-bottom: 30px; opacity: 0.9; }
+            button {
+                background: linear-gradient(135deg, #667eea, #764ba2);
+                color: white;
+                border: none;
+                padding: 12px 24px;
+                border-radius: 8px;
+                cursor: pointer;
+                font-size: 16px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="offline-content">
+            <h1>🔌 You're Offline</h1>
+            <p>No internet connection detected. Some features may not be available.</p>
+            <button onclick="window.location.reload()">Try Again</button>
+        </div>
+    </body>
+    </html>
+    ''')
 
 @app.errorhandler(404)
 def not_found_error(error):

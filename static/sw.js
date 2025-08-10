@@ -1,61 +1,62 @@
-// Service Worker for Crypto Alpha Analysis PWA
 const CACHE_NAME = 'crypto-alpha-v1.0.0';
-const CACHE_ASSETS = [
+const STATIC_CACHE = 'crypto-alpha-static-v1.0.0';
+const API_CACHE = 'crypto-alpha-api-v1.0.0';
+
+// Files to cache for offline functionality
+const STATIC_FILES = [
   '/',
-  '/static/css/style.css',
-  '/static/css/full-height.css',
-  '/static/js/navbar.js',
-  '/static/js/utils.js',
+  '/monitor',
   '/static/manifest.json',
-  // Bootstrap & external dependencies
-  'https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css',
-  'https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js',
-  'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css',
-  'https://code.jquery.com/jquery-3.6.0.min.js',
-  'https://cdn.jsdelivr.net/npm/chart.js'
+  '/static/icons/icon-192x192.png',
+  '/static/icons/icon-512x512.png'
 ];
 
-// Install event - cache essential assets
+// API endpoints to cache
+const API_ENDPOINTS = [
+  '/api/status',
+  '/api/monitor/status'
+];
+
+// Install event - cache static files
 self.addEventListener('install', (event) => {
-  console.log('[SW] Installing service worker...');
+  console.log('[SW] Installing service worker');
   
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => {
-        console.log('[SW] Caching essential assets');
-        return cache.addAll(CACHE_ASSETS);
+    Promise.all([
+      caches.open(STATIC_CACHE).then((cache) => {
+        console.log('[SW] Caching static files');
+        return cache.addAll(STATIC_FILES);
+      }),
+      caches.open(API_CACHE).then((cache) => {
+        console.log('[SW] Preparing API cache');
+        return cache.addAll(API_ENDPOINTS);
       })
-      .then(() => {
-        console.log('[SW] Service worker installed successfully');
-        return self.skipWaiting(); // Activate immediately
-      })
-      .catch((error) => {
-        console.error('[SW] Failed to cache assets:', error);
-      })
+    ])
   );
+  
+  // Force the waiting service worker to become the active one
+  self.skipWaiting();
 });
 
 // Activate event - clean up old caches
 self.addEventListener('activate', (event) => {
-  console.log('[SW] Activating service worker...');
+  console.log('[SW] Activating service worker');
   
   event.waitUntil(
-    caches.keys()
-      .then((cacheNames) => {
-        return Promise.all(
-          cacheNames.map((cacheName) => {
-            if (cacheName !== CACHE_NAME) {
-              console.log('[SW] Deleting old cache:', cacheName);
-              return caches.delete(cacheName);
-            }
-          })
-        );
-      })
-      .then(() => {
-        console.log('[SW] Service worker activated');
-        return self.clients.claim(); // Take control immediately
-      })
+    caches.keys().then((cacheNames) => {
+      return Promise.all(
+        cacheNames.map((cacheName) => {
+          if (cacheName !== STATIC_CACHE && cacheName !== API_CACHE) {
+            console.log('[SW] Deleting old cache:', cacheName);
+            return caches.delete(cacheName);
+          }
+        })
+      );
+    })
   );
+  
+  // Claim all clients immediately
+  self.clients.claim();
 });
 
 // Fetch event - serve from cache when offline
@@ -63,174 +64,159 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
   
-  // Skip non-GET requests and Chrome extension requests
-  if (request.method !== 'GET' || url.protocol === 'chrome-extension:') {
-    return;
-  }
-  
-  // Handle API requests differently
+  // Handle API requests
   if (url.pathname.startsWith('/api/')) {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          // Cache successful API responses for short time
-          if (response.ok && !url.pathname.includes('/stream')) {
-            const responseClone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(request, responseClone);
-            });
-          }
-          return response;
-        })
-        .catch(() => {
-          // Return cached API response if available
-          return caches.match(request)
-            .then((cachedResponse) => {
-              if (cachedResponse) {
-                return cachedResponse;
-              }
-              // Return offline message for failed API calls
-              return new Response(
-                JSON.stringify({
-                  error: 'Offline - cached data not available',
-                  offline: true
-                }),
-                {
-                  status: 503,
-                  headers: { 'Content-Type': 'application/json' }
-                }
-              );
-            });
-        })
-    );
+    event.respondWith(handleApiRequest(request));
     return;
   }
   
-  // Handle page requests with cache-first strategy
-  event.respondWith(
-    caches.match(request)
-      .then((cachedResponse) => {
-        if (cachedResponse) {
-          // Serve from cache, but also fetch in background for updates
-          fetch(request).then((response) => {
-            if (response.ok) {
-              caches.open(CACHE_NAME).then((cache) => {
-                cache.put(request, response.clone());
-              });
-            }
-          }).catch(() => {
-            // Network failed, but we have cache
-          });
-          return cachedResponse;
-        }
-        
-        // Not in cache, fetch from network
-        return fetch(request)
-          .then((response) => {
-            if (response.ok) {
-              const responseClone = response.clone();
-              caches.open(CACHE_NAME).then((cache) => {
-                cache.put(request, responseClone);
-              });
-            }
-            return response;
-          })
-          .catch(() => {
-            // Network failed and no cache - return offline page
-            if (request.destination === 'document') {
-              return caches.match('/') || new Response(
-                '<!DOCTYPE html><html><body><h1>Offline</h1><p>Please check your connection.</p></body></html>',
-                { headers: { 'Content-Type': 'text/html' } }
-              );
-            }
-            throw new Error('Network request failed and no cache available');
-          });
-      })
-  );
+  // Handle static files and pages
+  event.respondWith(handleStaticRequest(request));
 });
 
-// Handle background sync for data updates
-self.addEventListener('sync', (event) => {
-  if (event.tag === 'background-sync-data') {
-    event.waitUntil(
-      // Sync latest token data when connection restored
-      fetch('/api/status')
-        .then(() => {
-          console.log('[SW] Background sync: Data updated');
-          // Notify all clients that data was updated
-          self.clients.matchAll().then((clients) => {
-            clients.forEach((client) => {
-              client.postMessage({
-                type: 'DATA_SYNCED',
-                message: 'Latest data synchronized'
-              });
-            });
-          });
-        })
-        .catch((error) => {
-          console.log('[SW] Background sync failed:', error);
-        })
-    );
-  }
-});
-
-// Handle push notifications (for future alpha alerts)
-self.addEventListener('push', (event) => {
-  if (event.data) {
-    const data = event.data.json();
-    const options = {
-      body: data.body || 'New alpha token detected!',
-      icon: '/static/icons/icon-192x192.png',
-      badge: '/static/icons/icon-72x72.png',
-      data: data.url || '/',
-      actions: [
-        {
-          action: 'view',
-          title: 'View Token',
-          icon: '/static/icons/view-icon.png'
-        },
-        {
-          action: 'dismiss',
-          title: 'Dismiss',
-          icon: '/static/icons/dismiss-icon.png'
-        }
-      ],
-      requireInteraction: true,
-      tag: 'alpha-alert'
-    };
+// Handle API requests with network-first strategy
+async function handleApiRequest(request) {
+  const url = new URL(request.url);
+  
+  try {
+    // Try network first
+    const networkResponse = await fetch(request);
     
-    event.waitUntil(
-      self.registration.showNotification(data.title || 'Crypto Alpha Alert', options)
-    );
+    // Cache successful responses
+    if (networkResponse.ok) {
+      const cache = await caches.open(API_CACHE);
+      cache.put(request, networkResponse.clone());
+    }
+    
+    return networkResponse;
+  } catch (error) {
+    console.log('[SW] Network failed for API, trying cache:', url.pathname);
+    
+    // Fallback to cache
+    const cachedResponse = await caches.match(request);
+    if (cachedResponse) {
+      return cachedResponse;
+    }
+    
+    // Return offline response for critical endpoints
+    if (url.pathname === '/api/status') {
+      return new Response(JSON.stringify({
+        status: 'offline',
+        message: 'Application is offline',
+        cached_data: {
+          eth_buy: false,
+          eth_sell: false,
+          base_buy: false,
+          base_sell: false
+        }
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    throw error;
   }
+}
+
+// Handle static requests with cache-first strategy
+async function handleStaticRequest(request) {
+  // Try cache first
+  const cachedResponse = await caches.match(request);
+  if (cachedResponse) {
+    return cachedResponse;
+  }
+  
+  try {
+    // Try network
+    const networkResponse = await fetch(request);
+    
+    // Cache successful responses
+    if (networkResponse.ok) {
+      const cache = await caches.open(STATIC_CACHE);
+      cache.put(request, networkResponse.clone());
+    }
+    
+    return networkResponse;
+  } catch (error) {
+    // Return offline page for navigation requests
+    if (request.mode === 'navigate') {
+      const offlineResponse = await caches.match('/');
+      if (offlineResponse) {
+        return offlineResponse;
+      }
+    }
+    
+    throw error;
+  }
+}
+
+// Handle background sync for when connection is restored
+self.addEventListener('sync', (event) => {
+  console.log('[SW] Background sync triggered:', event.tag);
+  
+  if (event.tag === 'refresh-data') {
+    event.waitUntil(refreshCachedData());
+  }
+});
+
+// Refresh cached data when connection is restored
+async function refreshCachedData() {
+  try {
+    const cache = await caches.open(API_CACHE);
+    
+    // Refresh critical endpoints
+    const endpoints = ['/api/status', '/api/monitor/status'];
+    
+    for (const endpoint of endpoints) {
+      try {
+        const response = await fetch(endpoint);
+        if (response.ok) {
+          await cache.put(endpoint, response);
+          console.log('[SW] Refreshed cache for:', endpoint);
+        }
+      } catch (error) {
+        console.log('[SW] Failed to refresh:', endpoint);
+      }
+    }
+  } catch (error) {
+    console.log('[SW] Error refreshing cached data:', error);
+  }
+}
+
+// Handle push notifications (if needed later)
+self.addEventListener('push', (event) => {
+  if (!event.data) return;
+  
+  const data = event.data.json();
+  const options = {
+    body: data.body,
+    icon: '/static/icons/icon-192x192.png',
+    badge: '/static/icons/badge-72x72.png',
+    data: data.url,
+    actions: [
+      {
+        action: 'open',
+        title: 'View Details'
+      },
+      {
+        action: 'dismiss',
+        title: 'Dismiss'
+      }
+    ]
+  };
+  
+  event.waitUntil(
+    self.registration.showNotification(data.title, options)
+  );
 });
 
 // Handle notification clicks
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   
-  if (event.action === 'view') {
+  if (event.action === 'open' || !event.action) {
     event.waitUntil(
-      self.clients.openWindow(event.notification.data)
+      clients.openWindow(event.notification.data || '/')
     );
-  } else if (event.action === 'dismiss') {
-    // Just close the notification
-    return;
-  } else {
-    // Default action - open the app
-    event.waitUntil(
-      self.clients.openWindow('/')
-    );
-  }
-});
-
-// Handle messages from main app
-self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'SKIP_WAITING') {
-    self.skipWaiting();
-  }
-  
-  if (event.data && event.data.type === 'GET_VERSION') {
-    event.ports[0].postMessage({ version: CACHE_NAME });
   }
 });
