@@ -10,10 +10,6 @@ __pycache__/
 # C extensions
 *.so
 
-alerts/
-config/
-logs/
-
 # Distribution / packaging
 .Python
 build/
@@ -129,6 +125,10 @@ celerybeat.pid
 
 # Environments
 .env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 .venv
 env/
 venv/
@@ -176,5 +176,84 @@ poetry.toml
 
 # LSP config files
 pyrightconfig.json
+
+# Application-specific directories
+alerts/
+config/
+logs/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Google Cloud specific
+.gcloudignore
+service-account-key.json
+gcp-key.json
+*.json
+!package.json
+!package-lock.json
+
+# Docker
+.dockerignore
+Dockerfile.dev
+docker-compose.override.yml
+
+# Deployment files with secrets
+app.yaml.prod
+cloudbuild.yaml
+.secrets/
+
+# Windows deployment scripts with secrets
+secure-deploy.ps1
+secure-deploy.bat
+deploy.ps1
+deploy.bat
+
+# Local development
+local_config.py
+dev_config.py
+
+# Backup files
+*.bak
+*.backup
+
+# Certificate files
+*.pem
+*.key
+*.crt
+
+# API Keys and secrets (be extra careful)
+*api_key*
+*secret*
+*password*
+credentials.json
+
+# Monitor data
+monitor_data/
+historical_data/
 
 # End of https://www.toptal.com/developers/gitignore/api/python

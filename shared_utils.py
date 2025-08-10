@@ -13,7 +13,7 @@ load_dotenv()
 # Configuration
 ALCHEMY_API_KEY = os.getenv('ALCHEMY_API_KEY')
 ALCHEMY_URL = f"https://eth-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"
-MONGO_URI = 'mongodb://localhost:27017'
+MONGO_URI = os.getenv('MONGO_URI')
 DB_NAME = 'crypto_tracker'
 WALLETS_COLLECTION = 'smart_wallets'
 
