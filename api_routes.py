@@ -172,25 +172,25 @@ def generate_sse_stream(network, analysis_type, message_queue, params=None):
             
             # Import and run the appropriate analyzer
             if network == 'eth' and analysis_type == 'buy':
-                analyzer = eth_buy_tracker()
+                analyzer = ComprehensiveBuyTracker()
                 results = analyzer.analyze_all_trading_methods(
                     num_wallets=num_wallets, 
                     days_back=days_back
                 )
             elif network == 'eth' and analysis_type == 'sell':
-                analyzer = eth_sell_tracker()
+                analyzer = ComprehensiveSellTracker("ethereum")
                 results = analyzer.analyze_all_sell_methods(
                     num_wallets=num_wallets, 
                     days_back=days_back
                 )
             elif network == 'base' and analysis_type == 'buy':
-                analyzer = base_buy_tracker()
+                analyzer = ComprehensiveBuyTracker("base")
                 results = analyzer.analyze_all_trading_methods(
                     num_wallets=num_wallets, 
                     days_back=days_back
                 )
             elif network == 'base' and analysis_type == 'sell':
-                analyzer = base_sell_tracker()
+                analyzer = ComprehensiveSellTracker("base")
                 results = analyzer.analyze_all_sell_methods(
                     num_wallets=num_wallets, 
                     days_back=days_back
@@ -486,7 +486,7 @@ def eth_sell_analysis():
         num_wallets, days_back, _ = get_analysis_params()
         
         from tracker.sell_tracker import EthComprehensiveSellTracker
-        analyzer = EthComprehensiveSellTracker()
+        analyzer = EthComprehensiveSellTracker("ethereum")
         
         if not analyzer.test_connection():
             return jsonify({"error": "Connection failed"}), 500
@@ -539,9 +539,9 @@ def base_buy_analysis():
         network_config = settings.get_network_config('base')
         
         logger.info(f"Base buy analysis: {num_wallets} wallets, {days_back} days")
-        
-        analyzer = base_buy_tracker()
-        
+
+        analyzer = ComprehensiveBuyTracker()
+
         if not analyzer.test_connection():
             return jsonify({"error": "Base connection failed"}), 500
         
@@ -595,9 +595,9 @@ def base_sell_analysis():
     """Base network sell analysis"""
     try:
         num_wallets, days_back, _ = get_analysis_params()
-        
-        analyzer = base_sell_tracker()
-        
+
+        analyzer = ComprehensiveSellTracker("base")
+
         if not analyzer.test_connection():
             return jsonify({"error": "Base connection failed"}), 500
         
@@ -905,7 +905,7 @@ def test_monitor():
         if monitor:
             test_results['monitor_module'] = hasattr(monitor, 'get_status')
         
-        tracker = base_buy_tracker()
+        tracker = ComprehensiveBuyTracker()
         test_results['base_tracker'] = hasattr(tracker, 'test_connection')
         
         # Test eth tracker

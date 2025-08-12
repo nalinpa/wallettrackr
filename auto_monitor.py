@@ -351,8 +351,8 @@ class TokenMonitor:
                     days_back=days_back
                 )
             elif network == 'base' and analysis_type == 'buy':
-                from tracker.base_buy_tracker import BaseComprehensiveTracker
-                analyzer = BaseComprehensiveTracker()
+                from tracker.buy_tracker import ComprehensiveBuyTracker
+                analyzer = ComprehensiveBuyTracker()
                 results = analyzer.analyze_all_trading_methods(
                     num_wallets=self.config['num_wallets'],
                     days_back=days_back

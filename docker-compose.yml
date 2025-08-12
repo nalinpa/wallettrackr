@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  crypto-tracker:
+    build: .
+    container_name: crypto-tracker    
+    ports:
+      - "5005:8080"
+    environment:
+      - FLASK_ENV=production
+      - PYTHONUNBUFFERED=1
+      - PORT=8080
+      # Add your environment variables
+      - ALCHEMY_API_KEY=${ALCHEMY_API_KEY}
+      - SECRET_KEY=${SECRET_KEY}
+      - MONGO_URI=mongodb://mongodb:27017/crypto_tracker
+      - APP_PASSWORD=${APP_PASSWORD}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+    volumes:
+      # Persist logs and config
+      - ./logs:/app/logs
+      - ./config:/app/config
+      - ./alerts:/app/alerts
+    restart: unless-stopped
+    networks:
+      - crypto-network
+
+  # Optional: Add MongoDB if not using external service
+  mongodb:
+    image: mongo:7
+    container_name: crypto-mongodb
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongodb_data:/data/db
+    restart: unless-stopped
+    networks:
+      - crypto-network
+
+networks:
+  crypto-network:
+    driver: bridge
+
+volumes:
+  mongodb_data:

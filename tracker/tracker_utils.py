@@ -284,7 +284,10 @@ class BaseTracker(ABC):
         return ContractUtils.get_contract_info(address)
     
     def get_top_wallets(self, num_wallets: int = 50) -> List[Dict]:
-        """Get top wallets from database"""
+        """Get top wallets from database"""   
+        smart_wallets_count = self.wallets_collection.count_documents({})
+        print(f"Total smart wallets: {smart_wallets_count}") 
+        print(f"Wallet collection: {self.db[settings.database.wallets_collection]}")     
         return list(self.wallets_collection.find().sort("score", 1).limit(num_wallets))
     
     def test_connection(self) -> bool:

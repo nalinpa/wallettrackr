@@ -9,13 +9,13 @@ logger = logging.getLogger(__name__)
 class ComprehensiveBuyTracker(BaseTracker, NetworkSpecificMixins.BaseMixin):
     """Base network buy tracker using centralized utilities"""
     
-    def __init__(self):
-        super().__init__("base")
+    def __init__(self, network="base"):
+        super().__init__(network)
     
     def analyze_wallet_purchases(self, wallet_address: str, days_back: int = 1) -> List[Dict]:
         """Analyze token purchases on Base network"""
-        logger.info(f"Analyzing Base purchases for: {wallet_address}")
-        
+        logger.info(f"Analyzing {self.network} purchases for: {wallet_address}")
+
         start_block, end_block = self.get_recent_block_range(days_back)
         
         # Get transfers using parent class method

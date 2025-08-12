@@ -335,8 +335,8 @@ class EthComprehensiveSellTracker(ComprehensiveSellTracker):
         super().__init__("ethereum")
 
 class BaseComprehensiveSellTracker(ComprehensiveSellTracker):
-    def __init__(self):
-        super().__init__("base")
+    def __init__(self, network="base"):
+        super().__init__(network)
 
 def main():
     """Test the refactored sell tracker"""
