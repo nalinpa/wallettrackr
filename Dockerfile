@@ -18,8 +18,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
+COPY static/ ./static/
+
 # Create necessary directories
-RUN mkdir -p logs alerts config templates
+RUN mkdir -p logs config templates
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1

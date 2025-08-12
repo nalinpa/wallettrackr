@@ -1,17 +1,21 @@
-from tracker.shared_utils import BaseTracker, KNOWN_CONTRACTS, MIN_ETH_VALUE, EXCLUDED_TOKENS, print_header, print_insights
+from .tracker_utils import BaseTracker, NetworkSpecificMixins
 from typing import List, Dict
 import math
 import time
+import logging
 
-# Sell-specific configuration
-MIN_TOKENS_FOR_UNKNOWN = 100  # Minimum tokens for unknown address to count
+logger = logging.getLogger(__name__)
 
-class EthComprehensiveSellTracker(BaseTracker):
-    """Comprehensive ETH sell pressure tracker for all trading methods"""
+class ComprehensiveSellTracker(BaseTracker):
+    """Universal sell pressure tracker using centralized utilities"""
     
-    def analyze_wallet_sells(self, wallet_address: str, days_back: int = 7) -> List[Dict]:
-        """Analyze token sells including all methods (DEX, CEX, bots, unknown)"""
-        print(f"\n=== Analyzing ETH sells for: {wallet_address} ===")
+    def __init__(self, network: str):
+        super().__init__(network)
+        self.min_tokens_for_unknown = 50 if network == "base" else 100
+    
+    def analyze_wallet_sells(self, wallet_address: str, days_back: int = 1) -> List[Dict]:
+        """Analyze token sells for any network"""
+        logger.info(f"Analyzing {self.network} sells for: {wallet_address}")
         
         start_block, end_block = self.get_recent_block_range(days_back)
         
@@ -27,79 +31,50 @@ class EthComprehensiveSellTracker(BaseTracker):
         }])
         
         outgoing_transfers = outgoing_result.get("result", {}).get("transfers", [])
-        print(f"Found {len(outgoing_transfers)} outgoing token transfers")
+        logger.debug(f"Found {len(outgoing_transfers)} outgoing token transfers")
         
         sells = []
-        sell_methods = {"DEX": 0, "CEX": 0, "TELEGRAM_BOT": 0, "MEV_BOT": 0, "P2P_OTC": 0, "UNKNOWN": 0}
-        filtered_boring = 0
-        filtered_small = 0
+        method_summary = {"DEX": 0, "CEX": 0, "TELEGRAM_BOT": 0, "MEV_BOT": 0, "P2P_OTC": 0, "UNKNOWN": 0}
         
         for transfer in outgoing_transfers:
-            token_sold = transfer.get("asset", "Unknown")
+            token_sold = transfer.get("asset")
             value = transfer.get("value", 0)
             
-            # Safe float conversion
+            # Safe value conversion
             try:
                 amount_sold = float(value) if value is not None else 0.0
             except (ValueError, TypeError):
                 amount_sold = 0.0
-                
+            
+            # Use centralized token checking
+            if not self.is_interesting_token(token_sold):
+                continue
+            
+            # Skip dust
+            if amount_sold < 1:
+                continue
+            
             to_address = transfer.get("to", "").lower()
             tx_hash = transfer.get("hash", "")
             block_number = int(transfer.get("blockNum", "0x0"), 16)
             
-            # Skip if token is not interesting
-            if not self.is_interesting_token(token_sold):
-                filtered_boring += 1
-                continue
-            
-            # Skip very small amounts
-            if amount_sold < 1:
-                filtered_small += 1
-                continue
-            
-            # Determine sell method and recipient using enhanced detection
-            sell_method = "UNKNOWN"
-            recipient_name = "Unknown Address"
-            confidence = "LOW"
-            
-            # Check known contracts first
+            # Use centralized contract detection
             contract_info = self.get_contract_info(to_address)
-            if contract_info["type"] != "UNKNOWN":
-                sell_method = contract_info["type"]
-                recipient_name = contract_info["name"]
-                confidence = "HIGH"
-            else:
-                # Enhanced heuristic detection for unknown addresses
-                if self.looks_like_trading_contract(to_address, amount_sold, token_sold):
-                    if amount_sold >= MIN_TOKENS_FOR_UNKNOWN:
-                        sell_method = "P2P_OTC"
-                        recipient_name = f"Possible Trading Contract (Large)"
-                        confidence = "MEDIUM"
-                    else:
-                        sell_method = "UNKNOWN"
-                        recipient_name = "Unknown Trading Contract"
-                        confidence = "LOW"
-                else:
-                    sell_method = "UNKNOWN"
-                    recipient_name = "Unknown Address"
-                    confidence = "LOW"
+            sell_method, recipient_name, confidence = self._determine_sell_method(
+                contract_info, to_address, amount_sold, token_sold
+            )
             
-            # Estimate value
+            # Use centralized value estimation
             estimated_usd = self.estimate_usd_value(amount_sold, token_sold)
             estimated_eth = estimated_usd / 2000
             
-            # Include if meets criteria (more permissive for comprehensive tracking)
-            include_transfer = False
-            
-            if confidence == "HIGH":  # Known DEX/CEX/Bot
-                include_transfer = True
-            elif confidence == "MEDIUM" and estimated_eth >= MIN_ETH_VALUE * 0.5:  # Medium confidence with lower threshold
-                include_transfer = True
-            elif confidence == "LOW" and estimated_eth >= MIN_ETH_VALUE * 2:  # High value unknown transfers
-                include_transfer = True
-            
-            if include_transfer:
+            # Network-specific inclusion criteria
+            if self._should_include_sell(confidence, estimated_eth, token_sold):
+                # Check if Base native (only for Base network)
+                is_base_native = False
+                if self.network == "base" and hasattr(NetworkSpecificMixins.BaseMixin, 'is_base_native_token'):
+                    is_base_native = NetworkSpecificMixins.BaseMixin.is_base_native_token(token_sold)
+                
                 sell = {
                     "transaction_hash": tx_hash,
                     "token_sold": token_sold,
@@ -112,47 +87,70 @@ class EthComprehensiveSellTracker(BaseTracker):
                     "confidence": confidence,
                     "block_number": block_number,
                     "contract_address": transfer.get("rawContract", {}).get("address", ""),
-                    "platform": contract_info["platform"]
+                    "platform": contract_info["platform"],
+                    "is_base_native": is_base_native
                 }
                 
                 sells.append(sell)
-                sell_methods[sell_method] += 1
+                method_summary[sell_method] += 1
                 
+                # Logging
                 method_emoji = {
                     "DEX": "🔄", "CEX": "🏦", "TELEGRAM_BOT": "🤖", 
                     "MEV_BOT": "⚡", "P2P_OTC": "🤝", "UNKNOWN": "❓"
                 }
                 confidence_emoji = {"HIGH": "✅", "MEDIUM": "⚠️", "LOW": "❓"}
+                native_flag = "🔵" if is_base_native else ""
                 
-                print(f"  {method_emoji.get(sell_method, '❓')}{confidence_emoji[confidence]} SOLD: {token_sold} ({amount_sold:.0f}) → {recipient_name} | ~${estimated_usd:.0f}")
+                logger.debug(f"{method_emoji.get(sell_method, '❓')}{confidence_emoji[confidence]} {native_flag}SOLD: {token_sold} ({amount_sold:.0f}) → {recipient_name} | ~${estimated_usd:.0f}")
         
-        if filtered_boring > 0:
-            print(f"  Filtered out {filtered_boring} boring token sales")
-        if filtered_small > 0:
-            print(f"  Filtered out {filtered_small} dust transfers (< 1 token)")
-        
-        print(f"Found {len(sells)} significant token sales")
-        print(f"Methods: DEX={sell_methods['DEX']}, CEX={sell_methods['CEX']}, Bots={sell_methods['TELEGRAM_BOT'] + sell_methods['MEV_BOT']}, P2P={sell_methods['P2P_OTC']}, Unknown={sell_methods['UNKNOWN']}")
-        
+        logger.info(f"Found {len(sells)} significant {self.network} token sells")
         return sells
     
-    def looks_like_trading_contract(self, address: str, amount: float, token: str) -> bool:
-        """Enhanced heuristic to detect if address looks like a trading contract"""
+    def _determine_sell_method(self, contract_info: Dict, to_address: str, amount: float, token: str) -> tuple:
+        """Determine sell method using centralized contract detection"""
+        if contract_info["type"] != "UNKNOWN":
+            return contract_info["type"], contract_info["name"], "HIGH"
+        
+        # Enhanced heuristic detection
+        if self._looks_like_trading_contract(to_address, amount, token):
+            if amount >= self.min_tokens_for_unknown:
+                return "TELEGRAM_BOT", f"Possible {self.network.title()} Bot (Large)", "MEDIUM"
+            else:
+                return "UNKNOWN", f"Unknown {self.network.title()} Contract", "LOW"
+        
+        return "UNKNOWN", "Unknown Address", "LOW"
+    
+    def _looks_like_trading_contract(self, address: str, amount: float, token: str) -> bool:
+        """Enhanced heuristic to detect trading contracts"""
         patterns = [
-            # Address entropy and patterns
             len(set(address[2:])) >= 12,  # High entropy
             address.startswith("0x1111"),  # Aggregator pattern
-            address.startswith("0x7777"),  # Bot pattern
             address.startswith("0x3333"),  # Bot pattern
-            
-            # Transaction patterns
-            amount >= 1000,  # Large amounts
-            token in ["USDC", "USDT"] and amount >= 500,  # Stablecoin trading
-            
-            # Known bot-like patterns
+            address.startswith("0x7777"),  # Bot pattern
+            amount >= 100,  # Significant amounts
+            token in ["USDC", "USDT"] and amount >= 50,  # Stablecoin trading
             any(pattern in address for pattern in ["dead", "beef", "babe", "cafe"]),
         ]
         return any(patterns)
+    
+    def _should_include_sell(self, confidence: str, estimated_eth: float, token_sold: str) -> bool:
+        """Network-specific inclusion criteria"""
+        base_multiplier = 0.2 if self.network == "base" else 1.0
+        
+        if confidence == "HIGH":
+            return True
+        elif confidence == "MEDIUM" and estimated_eth >= (self.min_eth_value * base_multiplier):
+            return True
+        elif confidence == "LOW" and estimated_eth >= (self.min_eth_value * 2):
+            return True
+        
+        # Special case for Base native tokens
+        if self.network == "base" and hasattr(NetworkSpecificMixins.BaseMixin, 'is_base_native_token'):
+            if NetworkSpecificMixins.BaseMixin.is_base_native_token(token_sold) and estimated_eth >= (self.min_eth_value * 0.1):
+                return True
+        
+        return False
     
     def calculate_token_sell_score(self, token_data: Dict) -> float:
         """Calculate comprehensive sell pressure score"""
@@ -164,78 +162,42 @@ class EthComprehensiveSellTracker(BaseTracker):
             return 0.0
         
         max_possible_wallet_score = 300
-        
-        # Enhanced weighted ETH score with method and confidence multipliers
         weighted_eth_score = 0.0
+        
         for sell in sells:
             wallet_score = sell.get("wallet_score", max_possible_wallet_score)
             estimated_eth = sell.get("estimated_eth_value", 0)
             confidence = sell.get("confidence", "LOW")
             method = sell.get("sell_method", "UNKNOWN")
+            is_base_native = sell.get("is_base_native", False)
             
-            # Confidence multipliers
-            confidence_multipliers = {
-                "HIGH": 1.0,     # Known platforms = full weight
-                "MEDIUM": 0.8,   # Likely trading = 80% weight
-                "LOW": 0.5       # Unknown = 50% weight
-            }
-            
-            # Method multipliers (selling urgency indicators)
+            # Network-specific multipliers
+            confidence_multipliers = {"HIGH": 1.0, "MEDIUM": 0.9, "LOW": 0.6}
             method_multipliers = {
-                "CEX": 1.8,          # CEX = strongest sell signal
-                "TELEGRAM_BOT": 1.6, # Bot selling = strong signal
-                "MEV_BOT": 1.5,      # MEV = quick exit
-                "DEX": 1.3,          # DEX = normal sell
-                "P2P_OTC": 1.2,      # P2P = possible OTC
-                "UNKNOWN": 1.0       # Unknown = baseline
+                "CEX": 2.0, "TELEGRAM_BOT": 1.8, "MEV_BOT": 1.6,
+                "DEX": 1.4, "P2P_OTC": 1.3, "UNKNOWN": 1.0
             }
             
-            confidence_mult = confidence_multipliers.get(confidence, 0.3)
+            # Base native penalty
+            native_multiplier = 1.5 if (self.network == "base" and is_base_native) else 1.0
+            
+            confidence_mult = confidence_multipliers.get(confidence, 0.5)
             method_mult = method_multipliers.get(method, 1.0)
             
             if estimated_eth > 0:
                 wallet_quality_multiplier = (max_possible_wallet_score - wallet_score + 100) / 100
-                eth_component = math.log(1 + estimated_eth) * 10
-                weighted_eth_score += eth_component * wallet_quality_multiplier * confidence_mult * method_mult
+                eth_component = math.log(1 + estimated_eth * 1000) * 2
+                weighted_eth_score += eth_component * wallet_quality_multiplier * confidence_mult * method_mult * native_multiplier
         
-        # Weighted consensus score
+        # Use parent class consensus calculation
         score_components = self.calculate_score_components(wallet_scores, max_possible_wallet_score)
         weighted_consensus_score = score_components["weighted_consensus"]
         
-        final_score = (weighted_eth_score * weighted_consensus_score) / 10
+        # Network bonus
+        network_bonus = 1.2 if self.network == "base" else 1.0
+        
+        final_score = (weighted_eth_score * weighted_consensus_score * network_bonus) / 10
         return round(final_score, 2)
-    
-    def get_detailed_sell_metrics(self, token_data: Dict) -> Dict:
-        """Get detailed sell metrics with enhanced breakdowns"""
-        sells = token_data["sells"]
-        
-        # Method, confidence, and platform breakdown
-        method_breakdown = {}
-        confidence_breakdown = {}
-        platform_breakdown = {}
-        
-        for sell in sells:
-            method = sell.get("sell_method", "UNKNOWN")
-            confidence = sell.get("confidence", "LOW")
-            platform = sell.get("platform", "Unknown")
-            
-            for breakdown, key in [(method_breakdown, method), (confidence_breakdown, confidence), (platform_breakdown, platform)]:
-                if key not in breakdown:
-                    breakdown[key] = {"count": 0, "total_eth": 0}
-                
-                eth_val = sell.get("estimated_eth_value", 0)
-                breakdown[key]["count"] += 1
-                breakdown[key]["total_eth"] += eth_val
-        
-        # Top sells by value
-        top_sells = sorted(sells, key=lambda x: x.get("estimated_eth_value", 0), reverse=True)[:5]
-        
-        return {
-            "method_breakdown": method_breakdown,
-            "confidence_breakdown": confidence_breakdown,
-            "platform_breakdown": platform_breakdown,
-            "top_sells": top_sells
-        }
     
     def get_ranked_tokens(self, token_summary: Dict) -> List[tuple]:
         """Get tokens ranked by sell pressure score"""
@@ -247,225 +209,147 @@ class EthComprehensiveSellTracker(BaseTracker):
         
         return sorted(scored_tokens, key=lambda x: x[2], reverse=True)
     
-    def analyze_all_sell_methods(self, num_wallets: int = 174, days_back: int = 7):
-        """Analyze ALL sell methods on ETH mainnet"""
-        print(f"\n⚡ COMPREHENSIVE ETH SELL PRESSURE ANALYSIS")
-        print(f"=" * 60)
-        print(f"📊 Tracking ALL sell methods:")
-        print(f"   ✅ Traditional DEXs (Uniswap, 1inch, CoW Protocol)")
-        print(f"   🤖 Telegram Bots (UniBot, Banana Gun, Maestro)")
-        print(f"   🏦 CEX deposits")
-        print(f"   ⚡ MEV bots")
-        print(f"   🤝 P2P/OTC transfers")
-        print(f"   🔍 Unknown trading contracts")
-        print(f"=" * 60)
+    def analyze_wallet_purchases(self, wallet_address: str, days_back: int) -> List[Dict]:
+        """Not used for sell tracker, but required by abstract base"""
+        return []
+    
+    def analyze_all_trading_methods(self, num_wallets: int = 174, days_back: int = 1) -> Dict:
+        """Analyze all sell methods - main entry point"""
+        return self.analyze_all_sell_methods(num_wallets, days_back)
+    
+    def analyze_all_sell_methods(self, num_wallets: int = 174, days_back: int = 1) -> Dict:
+        """Analyze ALL sell methods on any network"""
+        logger.info(f"Starting comprehensive {self.network} sell pressure analysis: {num_wallets} wallets, {days_back} days")
         
         top_wallets = self.get_top_wallets(num_wallets)
         
         if not top_wallets:
-            print("No wallets found in database!")
+            logger.warning(f"No {self.network} wallets found in database!")
             return {}
         
         all_sells = []
         token_summary = {}
         method_summary = {"DEX": 0, "CEX": 0, "TELEGRAM_BOT": 0, "MEV_BOT": 0, "P2P_OTC": 0, "UNKNOWN": 0}
         
+        # Network-specific summary
+        network_summary = {}
+        if self.network == "base":
+            network_summary = {"native": 0, "bridged": 0}
+        
         for i, wallet in enumerate(top_wallets, 1):
             wallet_address = wallet["address"]
             wallet_score = wallet["score"]
             
-            print(f"\n[{i}/{num_wallets}] Wallet: {wallet_address} (Score: {wallet_score})")
+            logger.info(f"[{i}/{num_wallets}] {self.network.title()} Wallet: {wallet_address} (Score: {wallet_score})")
             
             try:
                 sells = self.analyze_wallet_sells(wallet_address, days_back)
                 
-                # Add wallet score to each sell
+                # Add wallet score
                 for sell in sells:
                     sell["wallet_score"] = wallet_score
                 
                 all_sells.extend(sells)
                 
                 # Aggregate data
-                for sell in sells:
-                    token = sell["token_sold"]
-                    method = sell["sell_method"]
-                    estimated_eth = sell.get("estimated_eth_value", 0)
-                    
-                    # Token summary
-                    if token not in token_summary:
-                        token_summary[token] = {
-                            "count": 0,
-                            "wallets": set(),
-                            "total_estimated_eth": 0,
-                            "wallet_scores": [],
-                            "sells": [],
-                            "methods": set(),
-                            "platforms": set(),
-                            "confidence_levels": set()
-                        }
-                    
-                    token_summary[token]["count"] += 1
-                    token_summary[token]["wallets"].add(wallet_address)
-                    token_summary[token]["total_estimated_eth"] += estimated_eth
-                    token_summary[token]["wallet_scores"].append(wallet_score)
-                    token_summary[token]["sells"].append(sell)
-                    token_summary[token]["methods"].add(method)
-                    token_summary[token]["platforms"].add(sell.get("platform", "Unknown"))
-                    token_summary[token]["confidence_levels"].add(sell.get("confidence", "LOW"))
-                    
-                    # Method summary
-                    method_summary[method] += 1
+                self._aggregate_sell_data(sells, token_summary, method_summary, network_summary, wallet_address)
                 
                 time.sleep(0.5)  # Rate limiting
                 
             except Exception as e:
-                print(f"Error analyzing wallet {wallet_address}: {e}")
+                logger.error(f"Error analyzing {self.network} wallet {wallet_address}: {e}")
                 continue
         
-        return self.generate_comprehensive_sell_analysis(all_sells, token_summary, method_summary)
+        return self._generate_sell_analysis(all_sells, token_summary, method_summary, network_summary)
     
-    def generate_comprehensive_sell_analysis(self, all_sells, token_summary, method_summary):
-        """Generate comprehensive sell analysis"""
-        print(f"\n" + "=" * 80)
-        print(f"COMPREHENSIVE ETH SELL PRESSURE ANALYSIS (All Methods)")
-        print(f"=" * 80)
+    def _aggregate_sell_data(self, sells, token_summary, method_summary, network_summary, wallet_address):
+        """Aggregate sell data into summaries"""
+        for sell in sells:
+            token = sell["token_sold"]
+            method = sell["sell_method"]
+            estimated_eth = sell.get("estimated_eth_value", 0)
+            is_base_native = sell.get("is_base_native", False)
+            
+            # Token summary
+            if token not in token_summary:
+                token_summary[token] = {
+                    "count": 0, "wallets": set(), "total_estimated_eth": 0,
+                    "wallet_scores": [], "sells": [], "methods": set(),
+                    "platforms": set(), "confidence_levels": set(),
+                    "is_base_native": is_base_native
+                }
+            
+            token_summary[token]["count"] += 1
+            token_summary[token]["wallets"].add(wallet_address)
+            token_summary[token]["total_estimated_eth"] += estimated_eth
+            token_summary[token]["wallet_scores"].append(sell.get("wallet_score", 300))
+            token_summary[token]["sells"].append(sell)
+            token_summary[token]["methods"].add(method)
+            token_summary[token]["platforms"].add(sell.get("platform", "Unknown"))
+            token_summary[token]["confidence_levels"].add(sell.get("confidence", "LOW"))
+            
+            # Method summary
+            method_summary[method] += 1
+            
+            # Network-specific summary
+            if self.network == "base" and isinstance(network_summary, dict):
+                if is_base_native:
+                    network_summary["native"] += 1
+                else:
+                    network_summary["bridged"] += 1
+    
+    def _generate_sell_analysis(self, all_sells, token_summary, method_summary, network_summary):
+        """Generate comprehensive sell analysis results"""
+        logger.info(f"Generating {self.network} sell analysis...")
         
-        print(f"🔴 Total alpha token sells: {len(all_sells)}")
-        print(f"🪙 Unique alpha tokens sold: {len(token_summary)}")
+        if not all_sells:
+            logger.info(f"✅ No significant {self.network} sell pressure detected!")
+            return {}
         
         total_estimated_eth = sum(sell.get("estimated_eth_value", 0) for sell in all_sells)
         total_estimated_usd = sum(sell.get("estimated_usd_value", 0) for sell in all_sells)
-        print(f"💰 Total estimated value: {total_estimated_eth:.3f} ETH (~${total_estimated_usd:,.0f})")
         
-        if len(all_sells) == 0:
-            print("\n✅ No significant sell pressure detected!")
-            return {}
-        
-        # Comprehensive method breakdown
-        print(f"\n📊 COMPREHENSIVE SELL METHOD BREAKDOWN:")
-        
-        # Categorize methods
-        bot_methods = method_summary.get("TELEGRAM_BOT", 0) + method_summary.get("MEV_BOT", 0)
-        dex_methods = method_summary.get("DEX", 0)
-        cex_methods = method_summary.get("CEX", 0)
-        other_methods = method_summary.get("P2P_OTC", 0) + method_summary.get("UNKNOWN", 0)
-        
-        total_sells = len(all_sells)
-        
-        if dex_methods > 0:
-            print(f"🔄 Traditional DEXs: {dex_methods} sells ({dex_methods/total_sells*100:.1f}%)")
-        if bot_methods > 0:
-            print(f"🤖 Trading Bots: {bot_methods} sells ({bot_methods/total_sells*100:.1f}%)")
-        if cex_methods > 0:
-            print(f"🏦 CEX Deposits: {cex_methods} sells ({cex_methods/total_sells*100:.1f}%)")
-        if other_methods > 0:
-            print(f"🔍 P2P/Unknown: {other_methods} sells ({other_methods/total_sells*100:.1f}%)")
-        
-        # Get ranked tokens by sell pressure
         ranked_tokens = self.get_ranked_tokens(token_summary)
         
-        # Sell pressure rankings
-        print(f"\n🚨 COMPREHENSIVE SELL PRESSURE RANKINGS:")
+        logger.info(f"{self.network.title()} sell analysis complete: {len(all_sells)} sells, {len(token_summary)} tokens, {total_estimated_eth:.4f} ETH")
         
-        for i, (token, data, sell_score) in enumerate(ranked_tokens[:10], 1):
-            wallet_count = len(data["wallets"])
-            estimated_eth = data["total_estimated_eth"]
-            methods = ", ".join(list(data["methods"])[:3])  # Top 3 methods
-            platforms = ", ".join(list(data["platforms"])[:3])  # Top 3 platforms
-            
-            warning = ["🚨", "⚠️", "⚠️"][i-1] if i <= 3 else f"{i:2d}."
-            print(f"  {warning} {token:>12}: σ={sell_score:>6.1f} | {wallet_count}W | {estimated_eth:.3f}Ξ")
-            print(f"      Methods: {methods} | Platforms: {platforms}")
-        
-        # Detailed breakdown for top 3 tokens
-        print(f"\n🔍 TOP 3 TOKENS UNDER SELL PRESSURE:")
-        for i, (token, data, sell_score) in enumerate(ranked_tokens[:3], 1):
-            print(f"\n  {i}. {token} (Sell Pressure Score: {sell_score})")
-            
-            metrics = self.get_detailed_sell_metrics(data)
-            wallet_count = len(data["wallets"])
-            estimated_eth = data["total_estimated_eth"]
-            
-            # Contract address
-            contract_addresses = set()
-            for sell in data["sells"]:
-                ca = sell.get("contract_address", "")
-                if ca:
-                    contract_addresses.add(ca)
-            main_ca = list(contract_addresses)[0] if contract_addresses else "N/A"
-            
-            print(f"     📍 Contract Address: {main_ca}")
-            print(f"     💰 Total Value: {estimated_eth:.3f} ETH")
-            print(f"     👥 Sell Consensus: {wallet_count} wallets")
-            
-            # Enhanced method breakdown
-            print(f"     📊 Sell Method Analysis:")
-            for method, method_data in sorted(metrics["method_breakdown"].items(), 
-                                            key=lambda x: x[1]["total_eth"], reverse=True):
-                count = method_data["count"]
-                eth_val = method_data["total_eth"]
-                method_emoji = {
-                    "DEX": "🔄", "CEX": "🏦", "TELEGRAM_BOT": "🤖", 
-                    "MEV_BOT": "⚡", "P2P_OTC": "🤝", "UNKNOWN": "❓"
-                }
-                emoji = method_emoji.get(method, "❓")
-                print(f"         {emoji} {method}: {count} sells ({eth_val:.3f} ETH)")
-            
-            # Platform breakdown
-            print(f"     🏪 Platform Analysis:")
-            for platform, platform_data in sorted(metrics["platform_breakdown"].items(), 
-                                                 key=lambda x: x[1]["total_eth"], reverse=True)[:3]:
-                count = platform_data["count"]
-                eth_val = platform_data["total_eth"]
-                print(f"         • {platform}: {count} sells ({eth_val:.3f} ETH)")
-        
-        return {
+        result = {
             "total_sells": len(all_sells),
             "unique_tokens": len(token_summary),
             "total_estimated_eth": total_estimated_eth,
+            "total_estimated_usd": total_estimated_usd,
             "ranked_tokens": ranked_tokens,
             "method_summary": method_summary,
             "all_sells": all_sells
         }
+        
+        # Add network-specific data
+        if self.network == "base" and network_summary:
+            result["base_native_summary"] = network_summary
+        
+        return result
+
+# Convenience classes for specific networks
+class EthComprehensiveSellTracker(ComprehensiveSellTracker):
+    def __init__(self):
+        super().__init__("ethereum")
+
+class BaseComprehensiveSellTracker(ComprehensiveSellTracker):
+    def __init__(self):
+        super().__init__("base")
 
 def main():
-    """Main function for comprehensive ETH sell analysis"""
-    tracker = EthComprehensiveSellTracker()
-    
-    print("⚡ ETH MAINNET COMPREHENSIVE SELL PRESSURE TRACKER")
-    print("=" * 50)
-    print("Tracking ALL ETH sell methods including bots and unknown contracts")
-    
-    if not tracker.test_connection():
-        print("❌ Connection failed")
-        return
-    
-    try:
-        results = tracker.analyze_all_sell_methods(num_wallets=174, days_back=7)
+    """Test the refactored sell tracker"""
+    # Test both networks
+    for network in ["ethereum", "base"]:
+        logger.info(f"Testing {network} sell tracker...")
+        tracker = ComprehensiveSellTracker(network)
         
-        if results and results.get("ranked_tokens"):
-            print(f"\n🚨 SELL PRESSURE DETECTED!")
-            print(f"💰 Total value being sold: {results.get('total_estimated_eth', 0):.3f} ETH")
-            print(f"🪙 {results.get('unique_tokens', 0)} unique tokens under pressure")
-            
-            # Show top tokens under pressure
-            print(f"\n🏆 TOP 5 TOKENS UNDER SELL PRESSURE:")
-            for i, (token, data, score) in enumerate(results["ranked_tokens"][:5], 1):
-                wallet_count = len(data["wallets"])
-                estimated_eth = data["total_estimated_eth"]
-                methods = ", ".join(list(data["methods"])[:2])
-                
-                warning = ["🚨", "⚠️", "⚠️", "📉", "📉"][i-1]
-                print(f"   {warning} {token}: σ={score:.1f} | {wallet_count}W | {estimated_eth:.3f}Ξ | via {methods}")
-            
+        if tracker.test_connection():
+            results = tracker.analyze_all_sell_methods(num_wallets=5, days_back=1)
+            logger.info(f"{network.title()} results: {len(results.get('ranked_tokens', []))} tokens")
         else:
-            print(f"\n✅ No significant sell pressure detected!")
-            print(f"💡 This suggests strong holding conviction among smart wallets")
-            
-    except Exception as e:
-        print(f"❌ Analysis failed: {e}")
-        import traceback
-        traceback.print_exc()
+            logger.error(f"Failed to connect to {network}")
 
 if __name__ == "__main__":
     main()

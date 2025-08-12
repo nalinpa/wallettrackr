@@ -8,15 +8,21 @@ from queue import Queue, Empty
 import threading
 import sys
 from io import StringIO
+import logging
 
+# Import settings
+from config.settings import settings, analysis_config, monitor_config, alchemy_config
 from auto_monitor import monitor
-from tracker.buy_tracker import EthComprehensiveTracker
-from tracker.sell_tracker import EthComprehensiveSellTracker
-from tracker.base_buy_tracker import BaseComprehensiveTracker
-from tracker.base_sell_tracker import BaseComprehensiveSellTracker
+from tracker.tracker_utils import BaseTracker, NetworkSpecificMixins
+from tracker.buy_tracker import ComprehensiveBuyTracker
+from tracker.sell_tracker import ComprehensiveSellTracker
+
 
 api_bp = Blueprint('api', __name__)
 service = AnalysisService()
+
+# Configure logger
+logger = logging.getLogger(__name__)
 
 analysis_in_progress = {
     'eth_buy': False,
@@ -39,6 +45,44 @@ def sanitize_for_json(obj):
         return sanitize_for_json(obj.__dict__)
     else:
         return obj
+
+def get_analysis_params():
+    """Get analysis parameters from request or use defaults from settings"""
+    try:
+        # Try to get from request context
+        num_wallets = request.args.get('wallets', analysis_config.default_wallet_count, type=int)
+        days_back = request.args.get('days', None, type=int)
+        network = request.args.get('network', 'base')
+    except RuntimeError:
+        # Outside request context, use defaults
+        num_wallets = analysis_config.default_wallet_count
+        days_back = None
+        network = 'base'
+    
+    # Apply limits from settings
+    num_wallets = min(num_wallets, analysis_config.max_wallet_count)
+    
+    # Set default days_back based on network from settings
+    if days_back is None:
+        try:
+            network_config = settings.get_network_config(network)
+            days_back = network_config['default_days_back']
+        except:
+            # Fallback if network config fails
+            if network == 'base':
+                days_back = analysis_config.default_days_back_base
+            else:
+                days_back = analysis_config.default_days_back_eth
+    
+    days_back = min(days_back, analysis_config.max_days_back)
+    
+    logger.info(f"Analysis params: network={network}, wallets={num_wallets}, days={days_back}")
+    
+    return num_wallets, days_back, network
+
+def should_exclude_token(token_symbol):
+    """Check if token should be excluded based on settings"""
+    return token_symbol.upper() in [t.upper() for t in analysis_config.excluded_tokens]
 
 class ConsoleCapture:
     """Capture console output and send it via SSE"""
@@ -77,7 +121,7 @@ class ConsoleCapture:
     def flush(self):
         self.original_stdout.flush()
 
-def generate_sse_stream(network, analysis_type, message_queue):
+def generate_sse_stream(network, analysis_type, message_queue, params=None):
     """Generate SSE stream for real-time console output AND results"""
     analysis_key = f"{network}_{analysis_type}"
     
@@ -106,21 +150,71 @@ def generate_sse_stream(network, analysis_type, message_queue):
         sys.stdout = console_capture
         
         try:
+            # Use passed parameters or get defaults (not from request context)
+            if params:
+                num_wallets, days_back = params['num_wallets'], params['days_back']
+            else:
+                # Use defaults from settings
+                num_wallets = analysis_config.default_wallet_count
+                if network == 'base':
+                    days_back = analysis_config.default_days_back_base
+                else:
+                    days_back = analysis_config.default_days_back_eth
+            
+            # Get network config
+            try:
+                network_config = settings.get_network_config(network)
+                min_eth_value = network_config['min_eth_value']
+            except:
+                min_eth_value = analysis_config.min_eth_value
+            
+            logger.info(f"Starting {network} {analysis_type} analysis with {num_wallets} wallets, {days_back} days back, min ETH: {min_eth_value}")
+            
             # Import and run the appropriate analyzer
             if network == 'eth' and analysis_type == 'buy':
-                analyzer = EthComprehensiveTracker()
-                results = analyzer.analyze_all_trading_methods(num_wallets=174, days_back=1)
+                analyzer = eth_buy_tracker()
+                results = analyzer.analyze_all_trading_methods(
+                    num_wallets=num_wallets, 
+                    days_back=days_back
+                )
             elif network == 'eth' and analysis_type == 'sell':
-                analyzer = EthComprehensiveSellTracker()
-                results = analyzer.analyze_all_sell_methods(num_wallets=174, days_back=1)
+                analyzer = eth_sell_tracker()
+                results = analyzer.analyze_all_sell_methods(
+                    num_wallets=num_wallets, 
+                    days_back=days_back
+                )
             elif network == 'base' and analysis_type == 'buy':
-                analyzer = BaseComprehensiveTracker()
-                results = analyzer.analyze_all_trading_methods(num_wallets=174, days_back=1)
+                analyzer = base_buy_tracker()
+                results = analyzer.analyze_all_trading_methods(
+                    num_wallets=num_wallets, 
+                    days_back=days_back
+                )
             elif network == 'base' and analysis_type == 'sell':
-                analyzer = BaseComprehensiveSellTracker()
-                results = analyzer.analyze_all_sell_methods(num_wallets=174, days_back=1)
+                analyzer = base_sell_tracker()
+                results = analyzer.analyze_all_sell_methods(
+                    num_wallets=num_wallets, 
+                    days_back=days_back
+                )
             else:
                 results = None
+            
+            # Filter excluded tokens if results exist
+            if results and results.get('ranked_tokens'):
+                filtered_tokens = []
+                for token_tuple in results['ranked_tokens']:
+                    # ranked_tokens is a list of tuples: (token, data, alpha_score)
+                    if isinstance(token_tuple, tuple) and len(token_tuple) >= 3:
+                        token_symbol = token_tuple[0]  # First element is the token symbol
+                        if not should_exclude_token(token_symbol):
+                            filtered_tokens.append(token_tuple)
+                        else:
+                            logger.debug(f"Excluding token {token_symbol} based on settings")
+                    else:
+                        # Fallback for unexpected format
+                        filtered_tokens.append(token_tuple)
+                
+                results['ranked_tokens'] = filtered_tokens
+                logger.info(f"Filtered to {len(filtered_tokens)} tokens after excluding configured tokens")
             
             # Convert results to be JSON serializable
             if results:
@@ -135,7 +229,7 @@ def generate_sse_stream(network, analysis_type, message_queue):
                 # Cache the results
                 service.cache_data(f'{network}_{analysis_type}', response_data)
                 
-                # IMPORTANT: Send the formatted results through SSE
+                # Send the formatted results through SSE
                 message_queue.put({
                     'type': 'results',
                     'data': response_data
@@ -145,10 +239,17 @@ def generate_sse_stream(network, analysis_type, message_queue):
             message_queue.put({
                 'type': 'complete', 
                 'status': 'success',
-                'has_results': bool(results and results.get('ranked_tokens'))
+                'has_results': bool(results and results.get('ranked_tokens')),
+                'config_used': {
+                    'num_wallets': num_wallets,
+                    'days_back': days_back,
+                    'min_eth_value': min_eth_value,
+                    'excluded_tokens_count': len(analysis_config.excluded_tokens)
+                }
             })
             
         except Exception as e:
+            logger.error(f"Analysis error: {e}", exc_info=True)
             print(f"❌ Error during analysis: {e}")
             message_queue.put({
                 'type': 'console',
@@ -169,8 +270,13 @@ def generate_sse_stream(network, analysis_type, message_queue):
     analysis_thread.start()
 
     def generate():
+        # Get expected wallet count from parameters or defaults
+        if params:
+            num_wallets = params['num_wallets']
+        else:
+            num_wallets = analysis_config.default_wallet_count
+            
         wallet_count = 0
-        total_wallets = 174
         completion_sent = False
         timeout_counter = 0
         max_timeout = 3000  # 5 minutes timeout (3000 * 0.1)
@@ -186,10 +292,10 @@ def generate_sse_stream(network, analysis_type, message_queue):
                 # Ensure message is JSON serializable
                 message = sanitize_for_json(message)
                 
-                # Track progress
+                # Track progress based on settings
                 if 'message' in message and 'Wallet:' in message.get('message', ''):
                     wallet_count += 1
-                    progress = int((wallet_count / total_wallets) * 100)
+                    progress = int((wallet_count / num_wallets) * 100)
                     yield f"data: {json.dumps({'type': 'progress', 'percentage': progress})}\n\n"
                 
                 # Send message
@@ -227,8 +333,16 @@ def generate_sse_stream(network, analysis_type, message_queue):
 def eth_buy_stream():
     """SSE endpoint for ETH buy analysis with console output"""
     message_queue = Queue()
+    
+    # Get parameters from request context before passing to generator
+    try:
+        num_wallets, days_back, _ = get_analysis_params()
+        params = {'num_wallets': num_wallets, 'days_back': days_back}
+    except:
+        params = None
+    
     return Response(
-        generate_sse_stream('eth', 'buy', message_queue),
+        generate_sse_stream('eth', 'buy', message_queue, params),
         mimetype="text/event-stream",
         headers={
             'Cache-Control': 'no-cache',
@@ -241,8 +355,16 @@ def eth_buy_stream():
 def eth_sell_stream():
     """SSE endpoint for ETH sell analysis with console output"""
     message_queue = Queue()
+    
+    # Get parameters from request context before passing to generator
+    try:
+        num_wallets, days_back, _ = get_analysis_params()
+        params = {'num_wallets': num_wallets, 'days_back': days_back}
+    except:
+        params = None
+    
     return Response(
-        generate_sse_stream('eth', 'sell', message_queue),
+        generate_sse_stream('eth', 'sell', message_queue, params),
         mimetype="text/event-stream",
         headers={
             'Cache-Control': 'no-cache',
@@ -255,8 +377,16 @@ def eth_sell_stream():
 def base_buy_stream():
     """SSE endpoint for Base buy analysis with console output"""
     message_queue = Queue()
+    
+    # Get parameters from request context before passing to generator
+    try:
+        num_wallets, days_back, _ = get_analysis_params()
+        params = {'num_wallets': num_wallets, 'days_back': days_back}
+    except:
+        params = None
+    
     return Response(
-        generate_sse_stream('base', 'buy', message_queue),
+        generate_sse_stream('base', 'buy', message_queue, params),
         mimetype="text/event-stream",
         headers={
             'Cache-Control': 'no-cache',
@@ -269,8 +399,16 @@ def base_buy_stream():
 def base_sell_stream():
     """SSE endpoint for Base sell analysis with console output"""
     message_queue = Queue()
+    
+    # Get parameters from request context before passing to generator
+    try:
+        num_wallets, days_back, _ = get_analysis_params()
+        params = {'num_wallets': num_wallets, 'days_back': days_back}
+    except:
+        params = None
+    
     return Response(
-        generate_sse_stream('base', 'sell', message_queue),
+        generate_sse_stream('base', 'sell', message_queue, params),
         mimetype="text/event-stream",
         headers={
             'Cache-Control': 'no-cache',
@@ -279,19 +417,27 @@ def base_sell_stream():
         }
     )
     
-# Keep existing endpoints
+# Keep existing endpoints but enhance with settings
 @api_bp.route('/eth/buy')
 def eth_buy_analysis():
     """ETH mainnet buy analysis"""
     try:
-        # Import the ETH buy analyzer
+        num_wallets, days_back, _ = get_analysis_params()
+        network_config = settings.get_network_config('ethereum')
+        
+        logger.info(f"ETH buy analysis: {num_wallets} wallets, {days_back} days")
+        
         from tracker.buy_tracker import EthComprehensiveTracker
         analyzer = EthComprehensiveTracker()
         
         if not analyzer.test_connection():
+            logger.error("ETH connection test failed")
             return jsonify({"error": "Connection failed"}), 500
         
-        results = analyzer.analyze_all_trading_methods(num_wallets=174, days_back=1)
+        results = analyzer.analyze_all_trading_methods(
+            num_wallets=num_wallets, 
+            days_back=days_back
+        )
         
         if not results or not results.get("ranked_tokens"):
             return jsonify({
@@ -299,8 +445,27 @@ def eth_buy_analysis():
                 "message": "No significant ETH buy activity found",
                 "total_purchases": 0,
                 "unique_tokens": 0,
-                "total_eth_spent": 0
+                "total_eth_spent": 0,
+                "config": {
+                    "num_wallets": num_wallets,
+                    "days_back": days_back,
+                    "min_eth_value": network_config['min_eth_value']
+                }
             })
+        
+        # Filter excluded tokens
+        if results.get('ranked_tokens'):
+            filtered_tokens = []
+            for token_tuple in results['ranked_tokens']:
+                # ranked_tokens is a list of tuples: (token, data, alpha_score)
+                if isinstance(token_tuple, tuple) and len(token_tuple) >= 3:
+                    token_symbol = token_tuple[0]  # First element is the token symbol
+                    if not should_exclude_token(token_symbol):
+                        filtered_tokens.append(token_tuple)
+                else:
+                    # Fallback for unexpected format
+                    filtered_tokens.append(token_tuple)
+            results['ranked_tokens'] = filtered_tokens
         
         response_data = service.format_buy_response(results, "ethereum")
         service.cache_data('eth_buy', response_data)
@@ -308,22 +473,28 @@ def eth_buy_analysis():
         return jsonify(response_data)
         
     except Exception as e:
+        logger.error(f"ETH buy analysis failed: {e}", exc_info=True)
         return jsonify({
             "error": f"ETH buy analysis failed: {str(e)}",
-            "traceback": traceback.format_exc()
+            "traceback": traceback.format_exc() if settings.flask.debug else None
         }), 500
 
 @api_bp.route('/eth/sell')
 def eth_sell_analysis():
     """ETH mainnet sell analysis"""
     try:
+        num_wallets, days_back, _ = get_analysis_params()
+        
         from tracker.sell_tracker import EthComprehensiveSellTracker
         analyzer = EthComprehensiveSellTracker()
         
         if not analyzer.test_connection():
             return jsonify({"error": "Connection failed"}), 500
         
-        results = analyzer.analyze_all_sell_methods(num_wallets=174, days_back=1)
+        results = analyzer.analyze_all_sell_methods(
+            num_wallets=num_wallets, 
+            days_back=days_back
+        )
         
         if not results or not results.get("ranked_tokens"):
             return jsonify({
@@ -334,28 +505,50 @@ def eth_sell_analysis():
                 "total_estimated_eth": 0
             })
         
+        # Filter excluded tokens
+        if results.get('ranked_tokens'):
+            filtered_tokens = []
+            for token_tuple in results['ranked_tokens']:
+                # ranked_tokens is a list of tuples: (token, data, alpha_score)
+                if isinstance(token_tuple, tuple) and len(token_tuple) >= 3:
+                    token_symbol = token_tuple[0]  # First element is the token symbol
+                    if not should_exclude_token(token_symbol):
+                        filtered_tokens.append(token_tuple)
+                else:
+                    # Fallback for unexpected format
+                    filtered_tokens.append(token_tuple)
+            results['ranked_tokens'] = filtered_tokens
+        
         response_data = service.format_sell_response(results, "ethereum")
         service.cache_data('eth_sell', response_data)
         
         return jsonify(response_data)
         
     except Exception as e:
+        logger.error(f"ETH sell analysis failed: {e}", exc_info=True)
         return jsonify({
             "error": f"ETH sell analysis failed: {str(e)}",
-            "traceback": traceback.format_exc()
+            "traceback": traceback.format_exc() if settings.flask.debug else None
         }), 500
 
 @api_bp.route('/base/buy')
 def base_buy_analysis():
     """Base network buy analysis"""
     try:
-        from tracker.base_buy_tracker import BaseComprehensiveTracker
-        analyzer = BaseComprehensiveTracker()
+        num_wallets, days_back, _ = get_analysis_params()
+        network_config = settings.get_network_config('base')
+        
+        logger.info(f"Base buy analysis: {num_wallets} wallets, {days_back} days")
+        
+        analyzer = base_buy_tracker()
         
         if not analyzer.test_connection():
             return jsonify({"error": "Base connection failed"}), 500
         
-        results = analyzer.analyze_all_trading_methods(num_wallets=174, days_back=1)
+        results = analyzer.analyze_all_trading_methods(
+            num_wallets=num_wallets, 
+            days_back=days_back
+        )
         
         if not results or not results.get("ranked_tokens"):
             return jsonify({
@@ -363,8 +556,27 @@ def base_buy_analysis():
                 "message": "No significant Base buy activity found",
                 "total_purchases": 0,
                 "unique_tokens": 0,
-                "total_eth_spent": 0
+                "total_eth_spent": 0,
+                "config": {
+                    "num_wallets": num_wallets,
+                    "days_back": days_back,
+                    "min_eth_value": network_config['min_eth_value']
+                }
             })
+        
+        # Filter excluded tokens
+        if results.get('ranked_tokens'):
+            filtered_tokens = []
+            for token_tuple in results['ranked_tokens']:
+                # ranked_tokens is a list of tuples: (token, data, alpha_score)
+                if isinstance(token_tuple, tuple) and len(token_tuple) >= 3:
+                    token_symbol = token_tuple[0]  # First element is the token symbol
+                    if not should_exclude_token(token_symbol):
+                        filtered_tokens.append(token_tuple)
+                else:
+                    # Fallback for unexpected format
+                    filtered_tokens.append(token_tuple)
+            results['ranked_tokens'] = filtered_tokens
         
         response_data = service.format_buy_response(results, "base")
         service.cache_data('base_buy', response_data)
@@ -372,22 +584,27 @@ def base_buy_analysis():
         return jsonify(response_data)
         
     except Exception as e:
+        logger.error(f"Base buy analysis failed: {e}", exc_info=True)
         return jsonify({
             "error": f"Base buy analysis failed: {str(e)}",
-            "traceback": traceback.format_exc()
+            "traceback": traceback.format_exc() if settings.flask.debug else None
         }), 500
 
 @api_bp.route('/base/sell')
 def base_sell_analysis():
     """Base network sell analysis"""
     try:
-        from tracker.base_sell_tracker import BaseComprehensiveSellTracker
-        analyzer = BaseComprehensiveSellTracker()
+        num_wallets, days_back, _ = get_analysis_params()
+        
+        analyzer = base_sell_tracker()
         
         if not analyzer.test_connection():
             return jsonify({"error": "Base connection failed"}), 500
         
-        results = analyzer.analyze_all_sell_methods(num_wallets=174, days_back=1)
+        results = analyzer.analyze_all_sell_methods(
+            num_wallets=num_wallets, 
+            days_back=days_back
+        )
         
         if not results or not results.get("ranked_tokens"):
             return jsonify({
@@ -398,15 +615,30 @@ def base_sell_analysis():
                 "total_estimated_eth": 0
             })
         
+        # Filter excluded tokens
+        if results.get('ranked_tokens'):
+            filtered_tokens = []
+            for token_tuple in results['ranked_tokens']:
+                # ranked_tokens is a list of tuples: (token, data, alpha_score)
+                if isinstance(token_tuple, tuple) and len(token_tuple) >= 3:
+                    token_symbol = token_tuple[0]  # First element is the token symbol
+                    if not should_exclude_token(token_symbol):
+                        filtered_tokens.append(token_tuple)
+                else:
+                    # Fallback for unexpected format
+                    filtered_tokens.append(token_tuple)
+            results['ranked_tokens'] = filtered_tokens
+        
         response_data = service.format_sell_response(results, "base")
         service.cache_data('base_sell', response_data)
         
         return jsonify(response_data)
         
-    except Exception:
+    except Exception as e:
+        logger.error(f"Base sell analysis failed: {e}", exc_info=True)
         return jsonify({
-            "error": f"Base sell analysis failed: {str(Exception)}",
-            "traceback": traceback.format_exc()
+            "error": f"Base sell analysis failed: {str(e)}",
+            "traceback": traceback.format_exc() if settings.flask.debug else None
         }), 500
 
 @api_bp.route('/status')
@@ -416,17 +648,27 @@ def api_status():
     
     return jsonify({
         "status": "online",
+        "environment": settings.environment,
         "cached_data": cache_status,
         "last_updated": service.get_last_updated(),
+        "supported_networks": [net.value for net in settings.monitor.supported_networks],
+        "config": {
+            "analysis": {
+                "default_wallet_count": analysis_config.default_wallet_count,
+                "max_wallet_count": analysis_config.max_wallet_count,
+                "max_days_back": analysis_config.max_days_back,
+                "excluded_tokens_count": len(analysis_config.excluded_tokens)
+            },
+            "monitor": {
+                "default_interval": monitor_config.default_check_interval_minutes,
+                "supported_networks": [net.value for net in monitor_config.supported_networks]
+            }
+        },
         "endpoints": [
-            "/api/eth/buy",
-            "/api/eth/sell",
-            "/api/base/buy",
-            "/api/base/sell",
-            "/api/eth/buy/stream",
-            "/api/eth/sell/stream",
-            "/api/base/buy/stream",
-            "/api/base/sell/stream"
+            "/api/eth/buy", "/api/eth/sell",
+            "/api/base/buy", "/api/base/sell",
+            "/api/eth/buy/stream", "/api/eth/sell/stream",
+            "/api/base/buy/stream", "/api/base/sell/stream"
         ]
     })
     
@@ -434,23 +676,23 @@ def api_status():
 def monitor_status():
     """Get monitor status"""
     try:
-        print("📍 Monitor status request received")
+        logger.info("Monitor status request received")
         
         if monitor:
             status = monitor.get_status()
-            print(f"✅ Monitor status: Running={status.get('is_running', False)}")
+            logger.info(f"Monitor status: Running={status.get('is_running', False)}")
             return jsonify(status)
         else:
-            print("⚠️ Monitor not initialized, returning default status")
+            logger.warning("Monitor not initialized, returning default status")
             return jsonify({
                 'is_running': False,
                 'error': 'Monitor not initialized',
                 'last_check': None,
                 'next_check': None,
                 'config': {
-                    'check_interval_minutes': 60,
-                    'networks': ['base'],
-                    'num_wallets': 50,
+                    'check_interval_minutes': monitor_config.default_check_interval_minutes,
+                    'networks': [net.value for net in monitor_config.default_networks],
+                    'num_wallets': analysis_config.default_wallet_count,
                     'use_interval_for_timeframe': True
                 },
                 'notification_channels': {
@@ -458,11 +700,7 @@ def monitor_status():
                     'file': True,
                     'webhook': False
                 },
-                'alert_thresholds': {
-                    'min_wallets': 2,
-                    'min_eth_spent': 0.5,
-                    'min_alpha_score': 30.0
-                },
+                'alert_thresholds': monitor_config.alert_thresholds,
                 'recent_alerts': [],
                 'stats': {
                     'total_alerts': 0,
@@ -471,8 +709,7 @@ def monitor_status():
                 }
             })
     except Exception as e:
-        print(f"❌ Error getting monitor status: {e}")
-        traceback.print_exc()
+        logger.error(f"Error getting monitor status: {e}", exc_info=True)
         return jsonify({
             'is_running': False,
             'error': str(e),
@@ -484,48 +721,48 @@ def monitor_status():
             'recent_alerts': []
         }), 500
 
+# Monitor endpoints with settings integration
 @api_bp.route('/monitor/start', methods=['POST'])
 def start_monitor():
     """Start the automated monitoring"""
     try:
-        print("📍 Monitor start request received")
+        logger.info("Monitor start request received")
         if monitor:
             result = monitor.start_monitoring()
-            print(f"✅ Monitor start result: {result}")
+            logger.info(f"Monitor start result: {result}")
             return jsonify(result)
         else:
             return jsonify({'status': 'error', 'message': 'Monitor not available'}), 500
     except Exception as e:
-        print(f"❌ Error starting monitor: {e}")
-        traceback.print_exc()
+        logger.error(f"Error starting monitor: {e}", exc_info=True)
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @api_bp.route('/monitor/stop', methods=['POST'])
 def stop_monitor():
     """Stop the automated monitoring"""
     try:
-        print("📍 Monitor stop request received")
+        logger.info("Monitor stop request received")
         if monitor:
             result = monitor.stop_monitoring()
-            print(f"✅ Monitor stop result: {result}")
+            logger.info(f"Monitor stop result: {result}")
             return jsonify(result)
         else:
             return jsonify({'status': 'error', 'message': 'Monitor not available'}), 500
     except Exception as e:
-        print(f"❌ Error stopping monitor: {e}")
-        traceback.print_exc()
+        logger.error(f"Error stopping monitor: {e}", exc_info=True)
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @api_bp.route('/monitor/check-now', methods=['POST'])
 def check_now():
     """Trigger an immediate check"""
     try:
+        logger.info("Immediate check requested")
         print("\n" + "="*60)
         print("🔍 IMMEDIATE CHECK REQUESTED")
         print("="*60)
         
         if not monitor:
-            print("❌ Monitor not available")
+            logger.error("Monitor not available")
             return jsonify({'status': 'error', 'message': 'Monitor not available'}), 500
         
         # Run the check in a background thread
@@ -535,8 +772,7 @@ def check_now():
                 monitor.check_for_new_tokens()
                 print("✅ Immediate check completed")
             except Exception as e:
-                print(f"❌ Error during immediate check: {e}")
-                traceback.print_exc()
+                logger.error(f"Error during immediate check: {e}", exc_info=True)
         
         thread = threading.Thread(target=run_check)
         thread.daemon = True
@@ -544,56 +780,73 @@ def check_now():
         
         return jsonify({'status': 'success', 'message': 'Check initiated - see console for output'})
     except Exception as e:
-        print(f"❌ Error initiating check: {e}")
-        traceback.print_exc()
+        logger.error(f"Error initiating check: {e}", exc_info=True)
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
+# Keep all other monitor endpoints with proper logging...
 @api_bp.route('/monitor/config', methods=['GET', 'POST'])
-def monitor_config():
+def monitor_config_endpoint():
     """Get or update monitor configuration"""
     try:
         if not monitor:
             if request.method == 'POST':
                 return jsonify({'status': 'error', 'message': 'Monitor not available'}), 500
             else:
-                # Return default config even if monitor isn't loaded
+                # Return default config from settings
                 return jsonify({
-                    'check_interval_minutes': 60,
-                    'networks': ['base'],
-                    'num_wallets': 174,
-                    'use_interval_for_timeframe': True
+                    'check_interval_minutes': monitor_config.default_check_interval_minutes,
+                    'networks': [net.value for net in monitor_config.default_networks],
+                    'num_wallets': analysis_config.default_wallet_count,
+                    'use_interval_for_timeframe': True,
+                    'alert_thresholds': monitor_config.alert_thresholds
                 })
             
         if request.method == 'POST':
-            print("📍 Monitor config update request received")
+            logger.info("Monitor config update request received")
             new_config = request.json
-            print(f"   New config: {new_config}")
+            logger.info(f"New config: {new_config}")
+            
+            # Validate config against settings limits
+            if 'check_interval_minutes' in new_config:
+                interval = new_config['check_interval_minutes']
+                if interval < monitor_config.min_check_interval_minutes:
+                    return jsonify({
+                        'status': 'error', 
+                        'message': f'Interval cannot be less than {monitor_config.min_check_interval_minutes} minutes'
+                    }), 400
+                if interval > monitor_config.max_check_interval_minutes:
+                    return jsonify({
+                        'status': 'error', 
+                        'message': f'Interval cannot exceed {monitor_config.max_check_interval_minutes} minutes'
+                    }), 400
+            
             monitor.config.update(new_config)
             monitor.save_config()
             return jsonify({'status': 'success', 'config': monitor.config})
         
-        print("📍 Monitor config request received")
+        logger.info("Monitor config request received")
         return jsonify(monitor.config)
     except Exception as e:
-        print(f"❌ Error with monitor config: {e}")
-        traceback.print_exc()
+        logger.error(f"Error with monitor config: {e}", exc_info=True)
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
+# Include all other existing monitor endpoints...
 @api_bp.route('/monitor/alerts', methods=['GET'])
 def get_alerts():
     """Get recent alerts"""
     try:
-        print("📍 Alerts request received")
+        logger.info("Alerts request received")
         if not monitor:
             return jsonify([])
             
-        limit = request.args.get('limit', 20, type=int)
+        limit = request.args.get('limit', monitor_config.max_stored_alerts, type=int)
+        limit = min(limit, monitor_config.max_stored_alerts)  # Enforce settings limit
+        
         alerts = [alert.to_dict() for alert in monitor.alerts[-limit:]]
-        print(f"✅ Returning {len(alerts)} alerts")
+        logger.info(f"Returning {len(alerts)} alerts")
         return jsonify(alerts)
     except Exception as e:
-        print(f"❌ Error getting alerts: {e}")
-        traceback.print_exc()
+        logger.error(f"Error getting alerts: {e}", exc_info=True)
         return jsonify([])
 
 @api_bp.route('/monitor/thresholds', methods=['POST'])
@@ -603,14 +856,18 @@ def update_thresholds():
         if not monitor:
             return jsonify({'status': 'error', 'message': 'Monitor not available'}), 500
             
-        print("📍 Threshold update request received")
+        logger.info("Threshold update request received")
         thresholds = request.json
-        print(f"   New thresholds: {thresholds}")
+        logger.info(f"New thresholds: {thresholds}")
+        
+        # Validate thresholds against reasonable limits
+        if 'min_wallets' in thresholds and thresholds['min_wallets'] < 1:
+            return jsonify({'status': 'error', 'message': 'min_wallets must be at least 1'}), 400
+        
         monitor.alert_thresholds.update(thresholds)
         return jsonify({'status': 'success', 'thresholds': monitor.alert_thresholds})
     except Exception as e:
-        print(f"❌ Error updating thresholds: {e}")
-        traceback.print_exc()
+        logger.error(f"Error updating thresholds: {e}", exc_info=True)
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @api_bp.route('/monitor/notifications', methods=['POST'])
@@ -620,26 +877,27 @@ def update_notifications():
         if not monitor:
             return jsonify({'status': 'error', 'message': 'Monitor not available'}), 500
             
-        print("📍 Notification settings update request received")
-        settings = request.json
-        print(f"   New settings: {settings}")
-        monitor.notification_channels.update(settings)
+        logger.info("Notification settings update request received")
+        notification_settings = request.json
+        logger.info(f"New settings: {notification_settings}")
+        monitor.notification_channels.update(notification_settings)
         return jsonify({'status': 'success', 'channels': monitor.notification_channels})
     except Exception as e:
-        print(f"❌ Error updating notifications: {e}")
-        traceback.print_exc()
+        logger.error(f"Error updating notifications: {e}", exc_info=True)
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @api_bp.route('/monitor/test', methods=['GET'])
 def test_monitor():
     """Test endpoint to verify monitor is working"""
-    print("📍 Monitor test endpoint called")
+    logger.info("Monitor test endpoint called")
     
     test_results = {
         'monitor_available': monitor is not None,
         'monitor_module': False,
         'base_tracker': False,
-        'eth_tracker': False
+        'eth_tracker': False,
+        'settings_loaded': True,
+        'alchemy_config': bool(alchemy_config.api_key)
     }
     
     try:
@@ -647,9 +905,7 @@ def test_monitor():
         if monitor:
             test_results['monitor_module'] = hasattr(monitor, 'get_status')
         
-        # Test base tracker
-        from tracker.base_buy_tracker import BaseComprehensiveTracker
-        tracker = BaseComprehensiveTracker()
+        tracker = base_buy_tracker()
         test_results['base_tracker'] = hasattr(tracker, 'test_connection')
         
         # Test eth tracker
@@ -660,14 +916,151 @@ def test_monitor():
         return jsonify({
             'status': 'success',
             'message': 'Monitor test completed',
-            'results': test_results
+            'results': test_results,
+            'settings_info': {
+                'environment': settings.environment,
+                'supported_networks': [net.value for net in settings.monitor.supported_networks],
+                'default_wallet_count': analysis_config.default_wallet_count,
+                'excluded_tokens_count': len(analysis_config.excluded_tokens)
+            }
         })
         
     except Exception as e:
+        logger.error(f"Monitor test failed: {e}", exc_info=True)
         return jsonify({
             'status': 'error',
             'message': f'Monitor test failed: {str(e)}',
             'results': test_results
+        }), 500
+
+@api_bp.route('/config', methods=['GET'])
+def get_api_config():
+    """Get current API configuration (safe, non-sensitive data only)"""
+    try:
+        return jsonify({
+            'status': 'success',
+            'config': {
+                'environment': settings.environment,
+                'analysis': {
+                    'default_wallet_count': analysis_config.default_wallet_count,
+                    'max_wallet_count': analysis_config.max_wallet_count,
+                    'default_days_back_eth': analysis_config.default_days_back_eth,
+                    'default_days_back_base': analysis_config.default_days_back_base,
+                    'max_days_back': analysis_config.max_days_back,
+                    'min_eth_value': analysis_config.min_eth_value,
+                    'min_eth_value_base': analysis_config.min_eth_value_base,
+                    'excluded_tokens_count': len(analysis_config.excluded_tokens),
+                    'alpha_scoring': analysis_config.alpha_scoring
+                },
+                'monitor': {
+                    'default_check_interval_minutes': monitor_config.default_check_interval_minutes,
+                    'min_check_interval_minutes': monitor_config.min_check_interval_minutes,
+                    'max_check_interval_minutes': monitor_config.max_check_interval_minutes,
+                    'default_networks': [net.value for net in monitor_config.default_networks],
+                    'supported_networks': [net.value for net in monitor_config.supported_networks],
+                    'alert_thresholds': monitor_config.alert_thresholds,
+                    'max_alerts_per_notification': monitor_config.max_alerts_per_notification,
+                    'max_stored_alerts': monitor_config.max_stored_alerts
+                },
+                'alchemy': {
+                    'rate_limit_per_second': alchemy_config.rate_limit_per_second,
+                    'timeout_seconds': alchemy_config.timeout_seconds,
+                    'max_retries': alchemy_config.max_retries,
+                    'api_key_configured': bool(alchemy_config.api_key)
+                }
+            }
+        })
+    except Exception as e:
+        logger.error(f"Error getting API config: {e}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': f'Failed to get configuration: {str(e)}'
+        }), 500
+
+@api_bp.route('/config/excluded-tokens', methods=['GET', 'POST'])
+def manage_excluded_tokens():
+    """Get or update excluded tokens list"""
+    try:
+        if request.method == 'GET':
+            return jsonify({
+                'status': 'success',
+                'excluded_tokens': analysis_config.excluded_tokens,
+                'count': len(analysis_config.excluded_tokens)
+            })
+        
+        elif request.method == 'POST':
+            data = request.json
+            action = data.get('action')  # 'add', 'remove', 'replace'
+            tokens = data.get('tokens', [])
+            
+            if action == 'add':
+                for token in tokens:
+                    if token.upper() not in [t.upper() for t in analysis_config.excluded_tokens]:
+                        analysis_config.excluded_tokens.append(token.upper())
+                        
+            elif action == 'remove':
+                analysis_config.excluded_tokens = [
+                    t for t in analysis_config.excluded_tokens 
+                    if t.upper() not in [token.upper() for token in tokens]
+                ]
+                
+            elif action == 'replace':
+                analysis_config.excluded_tokens = [token.upper() for token in tokens]
+                
+            else:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Invalid action. Use "add", "remove", or "replace"'
+                }), 400
+            
+            logger.info(f"Updated excluded tokens list: {action} - {tokens}")
+            
+            return jsonify({
+                'status': 'success',
+                'message': f'Successfully {action}ed tokens',
+                'excluded_tokens': analysis_config.excluded_tokens,
+                'count': len(analysis_config.excluded_tokens)
+            })
+            
+    except Exception as e:
+        logger.error(f"Error managing excluded tokens: {e}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': f'Failed to manage excluded tokens: {str(e)}'
+        }), 500
+
+@api_bp.route('/networks', methods=['GET'])
+def get_networks():
+    """Get supported networks and their configurations"""
+    try:
+        networks_info = {}
+        
+        for network in settings.monitor.supported_networks:
+            try:
+                network_config = settings.get_network_config(network.value)
+                networks_info[network.value] = {
+                    'supported': True,
+                    'min_eth_value': network_config['min_eth_value'],
+                    'default_days_back': network_config['default_days_back'],
+                    'alchemy_url_configured': bool(network_config.get('alchemy_url'))
+                }
+            except Exception as e:
+                networks_info[network.value] = {
+                    'supported': False,
+                    'error': str(e)
+                }
+        
+        return jsonify({
+            'status': 'success',
+            'networks': networks_info,
+            'default_networks': [net.value for net in monitor_config.default_networks]
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting networks info: {e}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': f'Failed to get networks info: {str(e)}'
         }), 500
         
 @api_bp.route('/token/<contract_address>')
@@ -679,19 +1072,38 @@ def token_details(contract_address):
         
         network = request.args.get('network', 'ethereum')
         
-        # Initialize the appropriate tracker based on network
-        if network == 'base':
-            from tracker.base_shared_utils import BaseTracker, is_base_native_token
-            tracker = BaseTracker()
-        else:
-            from tracker.shared_utils import BaseTracker
-            tracker = BaseTracker()
-            # For ethereum, create a dummy function
-            def is_base_native_token(token_symbol):
-                return False
+        # Validate network against settings
+        supported_networks = [net.value for net in settings.monitor.supported_networks]
+        if network not in supported_networks:
+            return jsonify({
+                'error': f'Network {network} not supported. Supported networks: {supported_networks}',
+                'contract_address': contract_address,
+                'network': network
+            }), 400
+        
+        # Get network-specific configuration
+        try:
+            network_config = settings.get_network_config(network)
+        except ValueError as e:
+            return jsonify({
+                'error': str(e),
+                'contract_address': contract_address,
+                'network': network
+            }), 400
+        
+        tracker = BaseTracker(network)
+        is_base_native_token = (
+            NetworkSpecificMixins.BaseMixin.is_base_native_token 
+            if network == 'base' 
+            else lambda x: False
+        )
         
         # Get token metadata using tracker's Alchemy connection
-        metadata_result = tracker.make_alchemy_request("alchemy_getTokenMetadata", [contract_address])
+        try:
+            metadata_result = tracker.make_alchemy_request("alchemy_getTokenMetadata", [contract_address])
+        except Exception as e:
+            logger.error(f"Failed to get token metadata: {e}")
+            metadata_result = {}
         
         metadata = {}
         if metadata_result.get('result'):
@@ -703,6 +1115,10 @@ def token_details(contract_address):
                 'totalSupply': result.get('totalSupply'),
                 'logo': result.get('logo')
             }
+        
+        # Check if token should be excluded based on settings
+        token_symbol = metadata.get('symbol', '')
+        is_excluded = should_exclude_token(token_symbol)
         
         # Get recent activity from our cached data
         activity = {}
@@ -716,12 +1132,10 @@ def token_details(contract_address):
         cached_sell_data = service.get_cached_data(cache_key_sell)
         
         # Search for token in buy data
-        token_symbol = metadata.get('symbol', '').upper()
-        
         if cached_buy_data and cached_buy_data.get('top_tokens'):
             for token_data in cached_buy_data['top_tokens']:
                 if (token_data.get('contract_address', '').lower() == contract_address.lower() or 
-                    token_data.get('token', '').upper() == token_symbol):
+                    token_data.get('token', '').upper() == token_symbol.upper()):
                     
                     activity = {
                         'wallet_count': token_data.get('wallet_count', 0),
@@ -736,7 +1150,7 @@ def token_details(contract_address):
         if cached_sell_data and cached_sell_data.get('top_tokens'):
             for token_data in cached_sell_data['top_tokens']:
                 if (token_data.get('contract_address', '').lower() == contract_address.lower() or 
-                    token_data.get('token', '').upper() == token_symbol):
+                    token_data.get('token', '').upper() == token_symbol.upper()):
                     
                     sell_pressure = {
                         'wallet_count': token_data.get('wallet_count', 0),
@@ -747,9 +1161,7 @@ def token_details(contract_address):
                     break
         
         # Generate mock recent purchases for demonstration
-        # In a real implementation, you'd store purchase details during analysis
         if activity.get('wallet_count', 0) > 0:
-            # Create sample purchases based on activity data
             platforms = activity.get('platforms', ['Unknown'])
             wallet_count = activity['wallet_count']
             total_eth = activity.get('total_eth_spent', 0)
@@ -772,20 +1184,58 @@ def token_details(contract_address):
         return jsonify({
             'contract_address': contract_address,
             'network': network,
+            'network_config': {
+                'min_eth_value': network_config['min_eth_value'],
+                'default_days_back': network_config['default_days_back']
+            },
             'metadata': metadata,
             'activity': activity,
             'sell_pressure': sell_pressure,
             'purchases': purchases,
             'is_base_native': is_base_native,
+            'is_excluded': is_excluded,
+            'excluded_reason': 'Token symbol in excluded list' if is_excluded else None,
             'last_updated': datetime.now().isoformat()
         })
         
     except Exception as e:
-        print(f"Error in token_details: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error in token_details: {e}", exc_info=True)
         return jsonify({
             'error': f'Failed to get token details: {str(e)}',
             'contract_address': contract_address,
-            'network': network
+            'network': network,
+            'traceback': traceback.format_exc() if settings.flask.debug else None
+        }), 500
+
+# Health check endpoint
+@api_bp.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint for load balancers"""
+    try:
+        # Basic health checks
+        health_status = {
+            'status': 'healthy',
+            'timestamp': datetime.now().isoformat(),
+            'environment': settings.environment,
+            'checks': {
+                'settings_loaded': True,
+                'alchemy_configured': bool(alchemy_config.api_key),
+                'cache_service': hasattr(service, 'get_cache_status'),
+                'monitor_available': monitor is not None
+            }
+        }
+        
+        # Check if any critical components are failing
+        if not alchemy_config.api_key:
+            health_status['status'] = 'degraded'
+            health_status['warnings'] = ['Alchemy API key not configured']
+        
+        return jsonify(health_status)
+        
+    except Exception as e:
+        logger.error(f"Health check failed: {e}", exc_info=True)
+        return jsonify({
+            'status': 'unhealthy',
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
         }), 500
