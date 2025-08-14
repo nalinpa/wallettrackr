@@ -12,6 +12,14 @@ from abc import ABC, abstractmethod
 # Import settings
 from config.settings import settings, alchemy_config, analysis_config
 
+# Import Web3 utilities
+try:
+    from .web3_utils import Web3Manager, EnhancedTransactionAnalyzer, Web3EnhancedTracker
+    WEB3_AVAILABLE = True
+except ImportError:
+    WEB3_AVAILABLE = False
+    print("⚠️  Web3 not available. Install with: pip install web3")
+
 logger = logging.getLogger(__name__)
 
 class NetworkConfig:
@@ -186,8 +194,8 @@ class ContractUtils:
         else:
             return "UNKNOWN"
 
-class BaseTracker(ABC):
-    """Centralized base tracker with all common functionality"""
+class EnhancedBaseTracker(ABC):
+    """Enhanced base tracker with Web3 integration"""
     
     def __init__(self, network: str):
         self.network = network
@@ -199,6 +207,20 @@ class BaseTracker(ABC):
         self.mongo_client = pymongo.MongoClient(settings.database.mongo_uri)
         self.db = self.mongo_client[settings.database.db_name]
         self.wallets_collection = self.db[settings.database.wallets_collection]
+        
+        # Web3 integration (if available)
+        self.web3_enabled = WEB3_AVAILABLE
+        if self.web3_enabled:
+            try:
+                self.web3_manager = Web3Manager()
+                self.web3_tracker = Web3EnhancedTracker(network)
+                self.w3 = self.web3_manager.get_web3(network)
+                logger.info(f"✅ Web3 enabled for {network} tracker")
+            except Exception as e:
+                logger.warning(f"⚠️  Web3 initialization failed for {network}: {e}")
+                self.web3_enabled = False
+        else:
+            logger.info(f"📡 Using Alchemy API for {network} (Web3 not available)")
         
         logger.info(f"Initialized {network} tracker with min ETH: {self.min_eth_value}")
     
@@ -235,8 +257,14 @@ class BaseTracker(ABC):
             return {}
     
     def get_recent_block_range(self, days_back: float = 1) -> Tuple[str, str]:
-        """Get block range for recent days"""
+        """Get block range for recent days - Enhanced with Web3 option"""
         try:
+            # Use Web3 if available (more reliable)
+            if self.web3_enabled and hasattr(self, 'web3_tracker'):
+                start_block, end_block = self.web3_tracker.get_recent_block_range_web3(days_back)
+                return hex(start_block), hex(end_block)
+            
+            # Fallback to Alchemy API
             current_block_result = self.make_alchemy_request("eth_blockNumber", [])
             
             if not current_block_result.get("result"):
@@ -293,25 +321,81 @@ class BaseTracker(ABC):
         return TokenUtils.estimate_usd_value(amount, token, self.network)
     
     def get_contract_info(self, address: str) -> Dict[str, str]:
-        """Get contract info - uses centralized logic"""
-        return ContractUtils.get_contract_info(address)
+        """Get contract info - Enhanced with Web3 analysis"""
+        # Get basic contract info
+        basic_info = ContractUtils.get_contract_info(address)
+        
+        # Enhance with Web3 if available
+        if self.web3_enabled and hasattr(self, 'web3_tracker'):
+            try:
+                # Get additional Web3 analysis
+                address_analysis = self.web3_tracker.tx_analyzer.analyze_address_activity(address)
+                
+                if address_analysis.get('is_contract', False):
+                    contract_info = address_analysis.get('contract_info', {})
+                    
+                    # Enhance basic info with Web3 data
+                    basic_info.update({
+                        'code_size': contract_info.get('code_size_bytes', 0),
+                        'complexity_score': contract_info.get('complexity_score', 0),
+                        'web3_verified': True
+                    })
+                
+            except Exception as e:
+                logger.debug(f"Web3 contract analysis failed for {address}: {e}")
+                basic_info['web3_verified'] = False
+        
+        return basic_info
     
     def get_top_wallets(self, num_wallets: int = 173) -> List[Dict]:
-        """Get top wallets from database"""   
+        """Get top wallets from database - Enhanced with Web3 analysis"""   
         smart_wallets_count = self.wallets_collection.count_documents({})
         print(f"Total smart wallets: {smart_wallets_count}") 
         print(f"Wallet collection: {self.db[settings.database.wallets_collection]}")     
-        return list(self.wallets_collection.find().sort('score', 1).limit(num_wallets).max_time_ms(30000))
+        
+        wallets = list(self.wallets_collection.find().sort('score', 1).limit(num_wallets).max_time_ms(30000))
+        
+        # Enhance with Web3 data if available
+        if self.web3_enabled and hasattr(self, 'web3_tracker'):
+            enhanced_wallets = []
+            for wallet in wallets[:5]:  # Only enhance first 5 for performance
+                try:
+                    wallet_address = wallet.get('address', '')
+                    if wallet_address:
+                        sophistication = self.web3_tracker.analyze_wallet_sophistication(wallet_address)
+                        wallet['web3_analysis'] = sophistication
+                    enhanced_wallets.append(wallet)
+                except Exception as e:
+                    logger.debug(f"Web3 wallet enhancement failed for {wallet.get('address', '')}: {e}")
+                    enhanced_wallets.append(wallet)
+            
+            # Add remaining wallets without enhancement
+            enhanced_wallets.extend(wallets[5:])
+            return enhanced_wallets
+        
+        return wallets
     
     def test_connection(self) -> bool:
-        """Test connection to network"""
+        """Test connection to network - Enhanced with Web3"""
         logger.info(f"Testing {self.network} connection...")
         
+        # Test Web3 connection first if available
+        if self.web3_enabled and hasattr(self, 'web3_tracker'):
+            try:
+                if self.web3_tracker.test_web3_connection():
+                    logger.info(f"✅ Web3 connection successful for {self.network}")
+                    return True
+                else:
+                    logger.warning(f"⚠️  Web3 connection failed, falling back to Alchemy API")
+            except Exception as e:
+                logger.warning(f"⚠️  Web3 test failed: {e}, falling back to Alchemy API")
+        
+        # Fallback to Alchemy API test
         try:
             result = self.make_alchemy_request("eth_blockNumber", [])
             if result.get("result"):
                 current_block = int(result["result"], 16)
-                logger.info(f"✅ Connected to {self.network} - Current block: {current_block}")
+                logger.info(f"✅ Connected to {self.network} via Alchemy API - Current block: {current_block}")
                 return True
             else:
                 logger.error(f"❌ Failed to connect to {self.network}")
@@ -344,6 +428,22 @@ class BaseTracker(ABC):
             "avg_wallet_score": sum(wallet_scores) / len(wallet_scores)
         }
     
+    def enhance_purchase_with_web3(self, purchase: Dict, tx_hash: str) -> Dict:
+        """Enhance purchase data with Web3 analysis"""
+        if not self.web3_enabled or not hasattr(self, 'web3_tracker'):
+            return purchase
+        
+        try:
+            enhanced = self.web3_tracker.enhanced_purchase_analysis(
+                purchase.get('wallet_address', ''),
+                tx_hash,
+                purchase
+            )
+            return enhanced
+        except Exception as e:
+            logger.debug(f"Web3 purchase enhancement failed: {e}")
+            return purchase
+    
     # Abstract methods that specific trackers must implement
     @abstractmethod
     def analyze_wallet_purchases(self, wallet_address: str, days_back: int) -> List[Dict]:
@@ -354,6 +454,9 @@ class BaseTracker(ABC):
     def analyze_all_trading_methods(self, num_wallets: int, days_back: int) -> Dict:
         """Analyze all trading methods"""
         pass
+
+# Backwards compatibility - keep the original BaseTracker name
+BaseTracker = EnhancedBaseTracker
 
 class NetworkSpecificMixins:
     """Network-specific functionality"""
@@ -387,3 +490,34 @@ class NetworkSpecificMixins:
                 "SNX", "MKR", "COMP", "PENDLE", "LDO", "FXS"
             }
             return token_symbol.upper() in major_defi
+
+# Utility functions for easy Web3 access
+def get_web3_manager():
+    """Get global Web3 manager instance"""
+    if WEB3_AVAILABLE:
+        try:
+            from .web3_utils import web3_manager
+            return web3_manager
+        except ImportError:
+            return None
+    return None
+
+def test_web3_setup():
+    """Test Web3 setup for all networks"""
+    if not WEB3_AVAILABLE:
+        print("❌ Web3 not available. Install with: pip install web3")
+        return False
+    
+    try:
+        from .web3_utils import test_all_web3_connections
+        results = test_all_web3_connections()
+        
+        print("🔍 Web3 Connection Test Results:")
+        for network, connected in results.items():
+            status = "✅ Connected" if connected else "❌ Failed"
+            print(f"   {network}: {status}")
+        
+        return all(results.values())
+    except Exception as e:
+        print(f"❌ Web3 test failed: {e}")
+        return False

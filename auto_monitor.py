@@ -149,6 +149,9 @@ class EnhancedMonitor:
         self.seen_purchases = 0
         self.total_alerts = 0
         self.monitor_thread = None
+
+        self.recent_alerts = {}  # {token_alerttype: last_alert_time}
+        self.alert_cooldown_hours = 2
         
         # Configuration
         self.config = {
@@ -164,7 +167,7 @@ class EnhancedMonitor:
             chat_id=telegram_config.chat_id
         )
     
-    # Update notification channels based on settings
+        # Update notification channels based on settings
         self.notification_channels = {
             'console': True,
             'file': False,
@@ -228,6 +231,23 @@ class EnhancedMonitor:
         
         return {'status': 'success', 'message': 'Monitor stopped'}
     
+    def _should_alert_for_token(self, token: str, alert_type: str) -> bool:
+        """Check if we should alert for this token (avoid duplicates)"""
+        now = datetime.now()
+        alert_key = f"{token}_{alert_type}"
+        
+        if alert_key in self.recent_alerts:
+            last_alert_time = self.recent_alerts[alert_key]
+            time_diff = now - last_alert_time
+            
+            if time_diff.total_seconds() < (self.alert_cooldown_hours * 3600):
+                hours_remaining = self.alert_cooldown_hours - (time_diff.total_seconds() / 3600)
+                print(f"🔕 Skipping duplicate alert for {token} (cooldown: {hours_remaining:.1f}h remaining)")
+                return False
+        
+        self.recent_alerts[alert_key] = now
+        return True
+
     def _monitor_loop(self):
         """Main monitoring loop with enhanced output"""
         print(f"🔄 Monitor loop started - checking every {self.config['check_interval_minutes']} minutes")
