@@ -6,11 +6,16 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass
 import json
 from flask import Blueprint
+import requests
+import io
+import sys
+from contextlib import redirect_stdout, redirect_stderr
+import traceback
 
 # Assuming these imports exist
 from tracker.buy_tracker import ComprehensiveBuyTracker
 from tracker.sell_tracker import ComprehensiveSellTracker
-from config.settings import settings, monitor_config
+from config.settings import settings, monitor_config, telegram_config
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +24,7 @@ class Alert:
     """Alert data structure"""
     timestamp: datetime
     network: str
-    alert_type: str  # 'new_token', 'high_activity', 'sell_pressure'
+    alert_type: str
     token: str
     message: str
     data: Dict
@@ -36,6 +41,102 @@ class Alert:
             'confidence': self.confidence
         }
 
+class TelegramNotifier:
+    """Telegram notification handler"""
+    
+    def __init__(self, bot_token: str = None, chat_id: str = None):
+        self.bot_token = bot_token
+        self.chat_id = chat_id
+        self.enabled = bool(bot_token and chat_id)
+        self.recent_alerts = {}  # {token: last_alert_time}
+        self.alert_cooldown_hours = 2
+        
+        if self.enabled:
+            logger.info(f"Telegram notifications enabled for chat: {chat_id}")
+        else:
+            logger.debug("Telegram notifications disabled (missing bot_token or chat_id)")
+    
+    def send_alert(self, alert: Alert) -> bool:
+        """Send alert to Telegram with DEX links"""
+        if not self.enabled:
+            return False
+        
+        try:
+            # Format message
+            confidence_emoji = {"HIGH": "🔥", "MEDIUM": "⚠️", "LOW": "ℹ️"}
+            type_emoji = {'new_token': '🆕', 'high_activity': '📈', 'sell_pressure': '📉'}
+            
+            emoji = f"{type_emoji.get(alert.alert_type, '🔔')} {confidence_emoji.get(alert.confidence, '📊')}"
+            
+            message = f"{emoji} *{alert.token}* Alert\n"
+            message += f"🌐 Network: *{alert.network.upper()}*\n"
+            message += f"📊 Type: {alert.alert_type.replace('_', ' ').title()}\n"
+            message += f"🎯 Confidence: *{alert.confidence}*\n\n"
+            
+            # Add data details
+            if alert.data:
+                if 'wallet_count' in alert.data:
+                    message += f"👥 Wallets: *{alert.data['wallet_count']}*\n"
+                if 'total_eth_spent' in alert.data:
+                    message += f"💰 ETH Spent: *{alert.data['total_eth_spent']:.3f}*\n"
+                elif 'total_estimated_eth' in alert.data:
+                    message += f"💰 ETH Value: *{alert.data['total_estimated_eth']:.3f}*\n"
+                if 'alpha_score' in alert.data:
+                    message += f"📈 Alpha Score: *{alert.data['alpha_score']:.1f}*\n"
+                elif 'sell_score' in alert.data:
+                    message += f"📉 Sell Score: *{alert.data['sell_score']:.1f}*\n"
+                if 'platforms' in alert.data and alert.data['platforms']:
+                    platforms = list(alert.data['platforms'])[:2]
+                    message += f"🏪 Platforms: {', '.join(platforms)}\n"
+            
+            message += f"\n🕐 {alert.timestamp.strftime('%H:%M:%S')}"
+            
+            # Add DEX links
+            message += f"\n\n🔗 *Quick Links:*"
+            
+            # Get contract address from alert data
+            contract_address = None
+            if alert.data and 'contract_address' in alert.data:
+                contract_address = alert.data['contract_address']
+            
+            if contract_address:
+                # DexScreener link
+                if alert.network.lower() == 'base':
+                    dexscreener_url = f"https://dexscreener.com/base/{contract_address}"
+                    uniswap_url = f"https://app.uniswap.org/#/swap?outputCurrency={contract_address}&chain=base"
+                else:  # ethereum
+                    dexscreener_url = f"https://dexscreener.com/ethereum/{contract_address}"
+                    uniswap_url = f"https://app.uniswap.org/#/swap?outputCurrency={contract_address}&chain=ethereum"
+                
+                message += f"\n📊 [DexScreener]({dexscreener_url})"
+                message += f"\n🦄 [Uniswap]({uniswap_url})"
+            else:
+                # Fallback search links
+                message += f"\n📊 [Search DexScreener](https://dexscreener.com/search?q={alert.token})"
+                message += f"\n🦄 [Search Uniswap](https://app.uniswap.org/)"
+            
+            # Send to Telegram
+            url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+            payload = {
+                'chat_id': self.chat_id,
+                'text': message,
+                'parse_mode': 'Markdown',
+                'disable_web_page_preview': True
+            }
+            
+            response = requests.post(url, json=payload, timeout=10)
+            
+            if response.status_code == 200:
+                logger.info(f"✅ Telegram alert sent for {alert.token}")
+                return True
+            else:
+                logger.error(f"❌ Telegram API error: {response.status_code} - {response.text}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Error sending Telegram alert: {e}")
+            return False
+    
 class EnhancedMonitor:
     """Enhanced monitor with rich console output like the trackers"""
     
@@ -58,11 +159,16 @@ class EnhancedMonitor:
             'alert_thresholds': monitor_config.alert_thresholds.copy()
         }
         
-        # Notification channels
+        self.telegram = TelegramNotifier(
+            bot_token=telegram_config.bot_token,
+            chat_id=telegram_config.chat_id
+        )
+    
+    # Update notification channels based on settings
         self.notification_channels = {
             'console': True,
-            'file': True,
-            'webhook': False
+            'file': False,
+            'telegram': True
         }
         
         self.alert_thresholds = monitor_config.alert_thresholds.copy()
@@ -263,14 +369,15 @@ class EnhancedMonitor:
                 print(f"   {i}. {confidence_emoji.get(alert.confidence, '📊')} {alert.message}")
         
         print(f"⏰ Next check in {self.config['check_interval_minutes']} minutes\n")
-    
+ 
     def _analyze_network(self, network: str, days_back: float) -> List[Alert]:
         """Analyze a specific network with detailed output"""
         alerts = []
         
         try:
-            # Buy analysis
+            # Buy analysis with console capture
             print(f"🔍 Analyzing {network} buy activity...")
+            
             buy_tracker = ComprehensiveBuyTracker(network)
             
             if not buy_tracker.test_connection():
@@ -279,66 +386,152 @@ class EnhancedMonitor:
             
             print(f"✅ {network} connection successful")
             
-            # Run buy analysis with limited wallets for monitoring
-            monitor_wallets = min(self.config['num_wallets'], 50)  # Limit for monitoring
+            # Use configured wallet count
+            monitor_wallets = self.config['num_wallets']
             print(f"📊 Analyzing {monitor_wallets} top {network} wallets...")
+            
+            # Capture and relay progress from buy tracker
+            class ProgressCapture:
+                def __init__(self, network_name):
+                    self.network_name = network_name
+                    self.original_print = print
+                
+                def write(self, text):
+                    if text.strip():
+                        # Relay important progress messages to monitor console
+                        if any(keyword in text for keyword in ['Processing wallet', 'Found', 'purchases', 'tokens']):
+                            print(f"   📊 {self.network_name}: {text.strip()}")
             
             buy_results = buy_tracker.analyze_all_trading_methods(
                 num_wallets=monitor_wallets,
                 days_back=days_back,
-                max_wallets_for_sse=True
+                max_wallets_for_sse=False
             )
             
             if buy_results and buy_results.get('ranked_tokens'):
-                print(f"💰 Found {len(buy_results['ranked_tokens'])} tokens with buy activity")
+                total_tokens = len(buy_results['ranked_tokens'])
+                total_purchases = buy_results.get('total_purchases', 0)
+                total_eth = buy_results.get('total_eth_spent', 0)
+                
+                print(f"💰 Found {total_tokens} tokens with buy activity")
+                print(f"   📈 Total purchases: {total_purchases}")
+                print(f"   💎 Total ETH spent: {total_eth:.3f}")
                 
                 # Process buy results for alerts
                 buy_alerts = self._process_buy_results(network, buy_results)
                 alerts.extend(buy_alerts)
+                
+                if buy_alerts:
+                    print(f"   🚨 Generated {len(buy_alerts)} buy alerts")
             else:
                 print(f"📊 No significant {network} buy activity detected")
             
-            # Sell analysis
+            # Sell analysis with console capture
             print(f"🔍 Analyzing {network} sell pressure...")
             sell_tracker = ComprehensiveSellTracker(network)
             
             sell_results = sell_tracker.analyze_all_sell_methods(
                 num_wallets=monitor_wallets,
                 days_back=days_back,
-                max_wallets_for_sse=True
+                max_wallets_for_sse=False
             )
             
             if sell_results and sell_results.get('ranked_tokens'):
-                print(f"📉 Found {len(sell_results['ranked_tokens'])} tokens with sell pressure")
+                total_sell_tokens = len(sell_results['ranked_tokens'])
+                total_sells = sell_results.get('total_sells', 0)
+                total_sell_eth = sell_results.get('total_estimated_eth', 0)
+                
+                print(f"📉 Found {total_sell_tokens} tokens with sell pressure")
+                print(f"   📉 Total sells: {total_sells}")
+                print(f"   💰 Total ETH value: {total_sell_eth:.3f}")
                 
                 # Process sell results for alerts
                 sell_alerts = self._process_sell_results(network, sell_results)
                 alerts.extend(sell_alerts)
+                
+                if sell_alerts:
+                    print(f"   🚨 Generated {len(sell_alerts)} sell alerts")
             else:
                 print(f"📊 No significant {network} sell pressure detected")
+            
+            # Network analysis summary
+            total_alerts = len(alerts)
+            if total_alerts > 0:
+                high_conf = len([a for a in alerts if a.confidence == 'HIGH'])
+                medium_conf = len([a for a in alerts if a.confidence == 'MEDIUM'])
+                low_conf = len([a for a in alerts if a.confidence == 'LOW'])
+                
+                print(f"📊 {network.upper()} Alert Summary:")
+                print(f"   🔥 High confidence: {high_conf}")
+                print(f"   ⚠️ Medium confidence: {medium_conf}")
+                print(f"   ℹ️ Low confidence: {low_conf}")
+                
+                # Show top 3 alerts
+                sorted_alerts = sorted(alerts, key=lambda x: {
+                    'HIGH': 3, 'MEDIUM': 2, 'LOW': 1
+                }.get(x.confidence, 0), reverse=True)
+                
+                print(f"🏆 Top alerts:")
+                for i, alert in enumerate(sorted_alerts[:3], 1):
+                    confidence_emoji = {"HIGH": "🔥", "MEDIUM": "⚠️", "LOW": "ℹ️"}
+                    type_emoji = {'new_token': '🆕', 'high_activity': '📈', 'sell_pressure': '📉'}
+                    
+                    wallets = alert.data.get('wallet_count', 0)
+                    eth_value = alert.data.get('total_eth_spent', alert.data.get('total_estimated_eth', 0))
+                    score = alert.data.get('alpha_score', alert.data.get('sell_score', 0))
+                    
+                    print(f"   {i}. {type_emoji.get(alert.alert_type, '🔔')}{confidence_emoji.get(alert.confidence, '📊')} "
+                        f"{alert.token}: {wallets} wallets, {eth_value:.3f} ETH, score={score:.1f}")
             
         except Exception as e:
             logger.error(f"Error analyzing {network}: {e}", exc_info=True)
             print(f"❌ {network} analysis error: {e}")
+            
+            error_lines = str(e).split('\n')[:2] 
+            for line in error_lines:
+                if line.strip():
+                    print(f"   🔍 Error detail: {line.strip()}")
         
-        return alerts
+        return alerts   
+ 
+    def _should_alert_for_token(self, token: str, alert_type: str) -> bool:
+        """Check if we should alert for this token (avoid duplicates)"""
+        now = datetime.now()
+        alert_key = f"{token}_{alert_type}"
+        
+        if alert_key in self.recent_alerts:
+            last_alert_time = self.recent_alerts[alert_key]
+            time_diff = now - last_alert_time
+            
+            if time_diff.total_seconds() < (self.alert_cooldown_hours * 3600):
+                hours_remaining = self.alert_cooldown_hours - (time_diff.total_seconds() / 3600)
+                print(f"🔕 Skipping duplicate alert for {token} (cooldown: {hours_remaining:.1f}h remaining)")
+                return False
+        
+        self.recent_alerts[alert_key] = now
+        return True
     
     def _process_buy_results(self, network: str, results: Dict) -> List[Alert]:
         """Process buy results and generate alerts"""
         alerts = []
         ranked_tokens = results.get('ranked_tokens', [])
         
-        for token, data, alpha_score in ranked_tokens[:10]:  # Top 10 tokens
+        for token, data, alpha_score in ranked_tokens[:10]:
             wallet_count = len(data.get('wallets', []))
             total_eth = data.get('total_eth_spent', 0)
             
-            # Check if this meets alert thresholds
             if (wallet_count >= self.alert_thresholds.get('min_wallets', 3) and 
                 total_eth >= self.alert_thresholds.get('min_eth_total', 0.1) and
                 alpha_score >= self.alert_thresholds.get('min_alpha_score', 10)):
                 
                 # Check if it's a new token
                 is_new = token not in self.known_tokens
+                alert_type = 'new_token' if is_new else 'high_activity'
+                
+                # Check cooldown to prevent duplicates
+                if not self._should_alert_for_token(token, alert_type):
+                    continue
+            
                 self.known_tokens.add(token)
                 
                 alert_type = 'new_token' if is_new else 'high_activity'
@@ -360,7 +553,8 @@ class EnhancedMonitor:
                         'total_eth_spent': total_eth,
                         'alpha_score': alpha_score,
                         'total_purchases': data.get('count', 0),
-                        'platforms': list(data.get('platforms', []))
+                        'platforms': list(data.get('platforms', [])),
+                        'contract_address': data.get('contract_address', '') 
                     },
                     confidence=confidence
                 )
@@ -410,6 +604,31 @@ class EnhancedMonitor:
         
         return alerts
     
+    def test_telegram(self) -> Dict:
+        """Test Telegram connection"""
+        if not self.telegram.enabled:
+            return {'success': False, 'message': 'Telegram not configured in settings'}
+        
+        test_message = f"🧪 *Test Alert*\n\nMonitor is working!\n🕐 {datetime.now().strftime('%H:%M:%S')}"
+        
+        try:
+            url = f"https://api.telegram.org/bot{self.telegram.bot_token}/sendMessage"
+            payload = {
+                'chat_id': self.telegram.chat_id,
+                'text': test_message,
+                'parse_mode': 'Markdown'
+            }
+            
+            response = requests.post(url, json=payload, timeout=10)
+            success = response.status_code == 200
+            
+            return {
+                'success': success,
+                'message': 'Test message sent!' if success else f'Error: {response.text}'
+            }
+        except Exception as e:
+            return {'success': False, 'message': str(e)}
+    
     def _determine_confidence(self, wallet_count: int, total_eth: float, alpha_score: float) -> str:
         """Determine confidence level for buy alerts"""
         if wallet_count >= 8 and total_eth >= 1.0 and alpha_score >= 50:
@@ -431,15 +650,19 @@ class EnhancedMonitor:
     def _process_alert(self, alert: Alert):
         """Process and send alerts through configured channels"""
         if self.notification_channels.get('console', True):
-            # Console notification already handled in _process_buy_results/_process_sell_results
+            # Console notification already handled
             pass
         
         if self.notification_channels.get('file', True):
             self._log_alert_to_file(alert)
         
-        if self.notification_channels.get('webhook', False):
-            self._send_webhook_alert(alert)
-    
+        if self.notification_channels.get('telegram', False):
+            success = self.telegram.send_alert(alert)
+            if success:
+                print(f"📱 Telegram alert sent for {alert.token}")
+            else:
+                print(f"❌ Failed to send Telegram alert for {alert.token}")
+        
     def _log_alert_to_file(self, alert: Alert):
         """Log alert to file"""
         try:
@@ -525,6 +748,16 @@ def check_now():
         return {'status': 'success', 'message': 'Check initiated'}
     except Exception as e:
         logger.error(f"Error running immediate check: {e}", exc_info=True)
+        return {'status': 'error', 'message': str(e)}, 500
+    
+@monitor_bp.route('/telegram/test', methods=['POST'])
+def test_telegram():
+    """Test Telegram connection"""
+    try:
+        result = monitor.test_telegram()
+        return result
+    except Exception as e:
+        logger.error(f"Error testing Telegram: {e}", exc_info=True)
         return {'status': 'error', 'message': str(e)}, 500
 
 # Export both the monitor instance and blueprint

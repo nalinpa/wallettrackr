@@ -565,7 +565,7 @@ def eth_buy_analysis():
         results = analyzer.analyze_all_trading_methods(
             num_wallets=num_wallets, 
             days_back=days_back,
-            max_wallets_for_sse=True
+            max_wallets_for_sse=False
         )
         
         if not results or not results.get("ranked_tokens"):
@@ -626,7 +626,7 @@ def eth_sell_analysis():
         results = analyzer.analyze_all_sell_methods(
             num_wallets=num_wallets, 
             days_back=days_back,
-            max_wallets_for_sse=True
+            max_wallets_for_sse=False
         )
         
         if not results or not results.get("ranked_tokens"):
@@ -685,7 +685,7 @@ def base_buy_analysis():
         results = analyzer.analyze_all_trading_methods(
             num_wallets=num_wallets, 
             days_back=days_back,
-            max_wallets_for_sse=True
+            max_wallets_for_sse=False
         )
         
         if not results or not results.get("ranked_tokens"):
@@ -746,7 +746,7 @@ def base_sell_analysis():
         results = analyzer.analyze_all_sell_methods(
             num_wallets=num_wallets, 
             days_back=days_back,
-            max_wallets_for_sse=True
+            max_wallets_for_sse=False
         )
         
         if not results or not results.get("ranked_tokens"):
