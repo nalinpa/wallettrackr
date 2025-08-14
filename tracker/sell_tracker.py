@@ -27,7 +27,7 @@ class ComprehensiveSellTracker(BaseTracker):
             "category": ["erc20"],
             "withMetadata": True,
             "excludeZeroValue": True,
-            "maxCount": "0x64"
+            "maxCount": "0x20"
         }])
         
         outgoing_transfers = outgoing_result.get("result", {}).get("transfers", [])
@@ -213,13 +213,18 @@ class ComprehensiveSellTracker(BaseTracker):
         """Not used for sell tracker, but required by abstract base"""
         return []
     
-    def analyze_all_trading_methods(self, num_wallets: int = 174, days_back: int = 1) -> Dict:
+    def analyze_all_trading_methods(self, num_wallets: int = 173,  max_wallets_for_sse: bool = False,  days_back: int = 1) -> Dict:
         """Analyze all sell methods - main entry point"""
-        return self.analyze_all_sell_methods(num_wallets, days_back)
+        return self.analyze_all_sell_methods(num_wallets, max_wallets_for_sse, days_back)
     
-    def analyze_all_sell_methods(self, num_wallets: int = 174, days_back: int = 1) -> Dict:
+    def analyze_all_sell_methods(self, num_wallets: int = 173, max_wallets_for_sse: bool = False, days_back: int = 1) -> Dict:
         """Analyze ALL sell methods on any network"""
         logger.info(f"Starting comprehensive {self.network} sell pressure analysis: {num_wallets} wallets, {days_back} days")
+        
+        # Limit wallets for SSE to prevent hanging
+        if max_wallets_for_sse:
+            num_wallets = min(num_wallets, 25)  # Max 25 for SSE
+            logger.info(f"SSE mode: limiting to {num_wallets} wallets")
         
         top_wallets = self.get_top_wallets(num_wallets)
         
@@ -238,9 +243,21 @@ class ComprehensiveSellTracker(BaseTracker):
         
         for i, wallet in enumerate(top_wallets, 1):
             wallet_address = wallet["address"]
+            
+            # Progress logging every 5 wallets
+            if i % 5 == 1 or i <= 3:
+                print(f"🔄 Processing wallet {i}/{len(top_wallets)}: {wallet_address[:10]}...")
+                logger.info(f"Progress: {i}/{len(top_wallets)} wallets processed")
+            
             wallet_score = wallet["score"]
             
-            logger.info(f"[{i}/{num_wallets}] {self.network.title()} Wallet: {wallet_address} (Score: {wallet_score})")
+            # Progress updates every wallet
+            print(f"🔄 [{i}/{len(top_wallets)}] Processing wallet {wallet_address[:8]}... (Score: {wallet_score})")
+            
+            # Send progress via logger (which gets captured by SSE)
+            if i % 5 == 1 or i <= 3:
+                logger.info(f"Progress: {i}/{len(top_wallets)} wallets processed")
+                logger.info(f"[{i}/{num_wallets}] {self.network.title()} Wallet: {wallet_address} (Score: {wallet_score})")
             
             try:
                 sells = self.analyze_wallet_sells(wallet_address, days_back)
@@ -255,6 +272,12 @@ class ComprehensiveSellTracker(BaseTracker):
                 self._aggregate_sell_data(sells, token_summary, method_summary, network_summary, wallet_address)
                 
                 time.sleep(0.5)  # Rate limiting
+                
+                # Memory cleanup every 10 wallets
+                if i % 10 == 0:
+                    import gc
+                    gc.collect()
+                    logger.debug(f"Memory cleanup at wallet {i}")
                 
             except Exception as e:
                 logger.error(f"Error analyzing {self.network} wallet {wallet_address}: {e}")
@@ -346,7 +369,7 @@ def main():
         tracker = ComprehensiveSellTracker(network)
         
         if tracker.test_connection():
-            results = tracker.analyze_all_sell_methods(num_wallets=5, days_back=1)
+            results = tracker.analyze_all_sell_methods(num_wallets=173, days_back=1)
             logger.info(f"{network.title()} results: {len(results.get('ranked_tokens', []))} tokens")
         else:
             logger.error(f"Failed to connect to {network}")

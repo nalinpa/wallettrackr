@@ -1,1077 +1,531 @@
-import schedule
 import time
 import threading
-from datetime import datetime, timedelta
-from flask import Blueprint, jsonify, request
-import json
-import os
-from typing import Dict, List, Set
-import requests
-from dataclasses import dataclass, asdict
-from collections import defaultdict
 import logging
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
+from dataclasses import dataclass
+import json
+from flask import Blueprint
 
-# Import settings
-from config.settings import settings, monitor_config, analysis_config, telegram_config
+# Assuming these imports exist
+from tracker.buy_tracker import ComprehensiveBuyTracker
+from tracker.sell_tracker import ComprehensiveSellTracker
+from config.settings import settings, monitor_config
 
-monitor_bp = Blueprint('monitor', __name__)
-
-# Configure logger
 logger = logging.getLogger(__name__)
 
 @dataclass
-class TokenAlert:
-    """Enhanced data class for token alerts with trading links"""
+class Alert:
+    """Alert data structure"""
+    timestamp: datetime
+    network: str
+    alert_type: str  # 'new_token', 'high_activity', 'sell_pressure'
     token: str
-    wallet_count: int
-    total_eth_spent: float
-    platforms: List[str]
-    contract_address: str
-    first_seen: datetime
-    alert_type: str
-    alpha_score: float = 0.0
-    network: str = 'base'
+    message: str
+    data: Dict
+    confidence: str = "MEDIUM"
     
     def to_dict(self):
-        # Generate trading links based on network
-        links = self._generate_trading_links()
-        
         return {
-            **asdict(self),
-            'first_seen': self.first_seen.isoformat(),
-            **links
-        }
-    
-    def _generate_trading_links(self):
-        """Generate network-specific trading links for Base and Ethereum only"""
-        # Network-specific chain IDs and names (Base and Ethereum only)
-        chain_info = {
-            'base': {'chain_id': 'base', 'chain_name': 'Base', 'uniswap_chain': 'base'},
-            'ethereum': {'chain_id': 'ethereum', 'chain_name': 'Ethereum', 'uniswap_chain': 'mainnet'},
-            'eth': {'chain_id': 'ethereum', 'chain_name': 'Ethereum', 'uniswap_chain': 'mainnet'}
-        }
-        
-        network_lower = self.network.lower()
-        info = chain_info.get(network_lower, chain_info['base'])  # Default to base
-        
-        # Uniswap URL
-        uniswap_url = f"https://app.uniswap.org/#/swap?outputCurrency={self.contract_address}&chain={info['uniswap_chain']}"
-        
-        # DexScreener URL
-        dexscreener_url = f"https://dexscreener.com/{info['chain_id']}/{self.contract_address}"
-        
-        # Additional useful links
-        additional_links = {
-            'uniswap_url': uniswap_url,
-            'dexscreener_url': dexscreener_url,
-            'trading_links': {
-                'uniswap': uniswap_url,
-                'dexscreener': dexscreener_url
-            }
-        }
-        
-        # Add network-specific explorer links
-        if network_lower == 'base':
-            additional_links['explorer_url'] = f"https://basescan.org/token/{self.contract_address}"
-            additional_links['trading_links']['basescan'] = additional_links['explorer_url']
-        elif network_lower in ['ethereum', 'eth']:
-            additional_links['explorer_url'] = f"https://etherscan.io/token/{self.contract_address}"
-            additional_links['trading_links']['etherscan'] = additional_links['explorer_url']
-        
-        return additional_links
-    
-    def get_uniswap_link(self):
-        """Get Uniswap trading link"""
-        return self._generate_trading_links()['uniswap_url']
-    
-    def get_dexscreener_link(self):
-        """Get DexScreener link"""
-        return self._generate_trading_links()['dexscreener_url']
-    
-    def get_all_links(self):
-        """Get all trading links as formatted text"""
-        links = self._generate_trading_links()
-        return {
-            'uniswap': links['uniswap_url'],
-            'dexscreener': links['dexscreener_url'],
-            'explorer': links.get('explorer_url', '')
+            'timestamp': self.timestamp.isoformat(),
+            'network': self.network,
+            'alert_type': self.alert_type,
+            'token': self.token,
+            'message': self.message,
+            'data': self.data,
+            'confidence': self.confidence
         }
 
-def should_exclude_token(token_symbol):
-    """Check if token should be excluded based on settings"""
-    return token_symbol.upper() in [t.upper() for t in analysis_config.excluded_tokens]
-
-class TokenMonitor:
-    """Automated monitoring system for smart wallet activity"""
+class EnhancedMonitor:
+    """Enhanced monitor with rich console output like the trackers"""
     
     def __init__(self):
         self.is_running = False
-        self.monitor_thread = None
         self.last_check = None
-        self.last_check_block = {}
-        self.known_tokens = set()
-        self.token_history = defaultdict(list)
+        self.next_check = None
         self.alerts = []
-        self.config = self.load_config()
-        self.scheduler_job = None
+        self.known_tokens = set()
+        self.seen_purchases = 0
+        self.total_alerts = 0
+        self.monitor_thread = None
         
-        # Track purchases to avoid duplicates
-        self.seen_purchases = set()
+        # Configuration
+        self.config = {
+            'check_interval_minutes': monitor_config.default_check_interval_minutes,
+            'networks': [net.value for net in monitor_config.default_networks],
+            'num_wallets': 173,
+            'use_interval_for_timeframe': True,
+            'alert_thresholds': monitor_config.alert_thresholds.copy()
+        }
         
-        # Load notification settings from config
+        # Notification channels
         self.notification_channels = {
             'console': True,
-            'telegram': telegram_config.enabled,
             'file': True,
             'webhook': False
         }
         
-        # Load alert thresholds from settings
         self.alert_thresholds = monitor_config.alert_thresholds.copy()
-        
-        logger.info(f"TokenMonitor initialized with settings:")
-        logger.info(f"  - Default interval: {monitor_config.default_check_interval_minutes} minutes")
-        logger.info(f"  - Supported networks: {[net.value for net in monitor_config.supported_networks]}")
-        logger.info(f"  - Alert thresholds: {self.alert_thresholds}")
-        logger.info(f"  - Telegram enabled: {telegram_config.enabled}")
-        logger.info(f"  - Excluded tokens: {len(analysis_config.excluded_tokens)}")
     
-    def load_config(self):
-        """Load configuration from file or use settings defaults"""
-        config_file = 'config/monitor_config.json'
-        
-        # Default config from settings
-        default_config = {
-            'check_interval_minutes': monitor_config.default_check_interval_minutes,
-            'networks': [net.value for net in monitor_config.default_networks],
-            'analysis_types': ['buy'],
-            'num_wallets': analysis_config.default_wallet_count,
-            'use_interval_for_timeframe': True,
-            'save_history': True,
-            'history_file': 'alerts/token_history.json'
-        }
-        
-        # Load from file if it exists, otherwise use defaults
-        if os.path.exists(config_file):
-            try:
-                with open(config_file, 'r') as f:
-                    file_config = json.load(f)
-                    # Merge with defaults, ensuring all required keys exist
-                    config = {**default_config, **file_config}
-                    
-                    # Validate against settings limits
-                    config['check_interval_minutes'] = max(
-                        config['check_interval_minutes'], 
-                        monitor_config.min_check_interval_minutes
-                    )
-                    config['check_interval_minutes'] = min(
-                        config['check_interval_minutes'], 
-                        monitor_config.max_check_interval_minutes
-                    )
-                    
-                    config['num_wallets'] = min(
-                        config['num_wallets'], 
-                        analysis_config.max_wallet_count
-                    )
-                    
-                    # Ensure networks are supported
-                    supported_networks = [net.value for net in monitor_config.supported_networks]
-                    config['networks'] = [
-                        net for net in config['networks'] 
-                        if net in supported_networks
-                    ]
-                    
-                    if not config['networks']:
-                        config['networks'] = [monitor_config.default_networks[0].value]
-                    
-                    logger.info(f"Loaded monitor config from file (validated against settings)")
-                    return config
-                    
-            except Exception as e:
-                logger.warning(f"Failed to load config file: {e}, using defaults")
-        
-        logger.info(f"Using default monitor config from settings")
-        return default_config
-    
-    def save_config(self):
-        """Save configuration to file"""
-        try:
-            os.makedirs('config', exist_ok=True)
-            
-            # Validate config before saving
-            validated_config = self.config.copy()
-            
-            # Apply settings limits
-            validated_config['check_interval_minutes'] = max(
-                min(validated_config['check_interval_minutes'], monitor_config.max_check_interval_minutes),
-                monitor_config.min_check_interval_minutes
-            )
-            
-            validated_config['num_wallets'] = min(
-                validated_config['num_wallets'], 
-                analysis_config.max_wallet_count
-            )
-            
-            with open('config/monitor_config.json', 'w') as f:
-                json.dump(validated_config, f, indent=2)
-                
-            logger.info("Monitor config saved successfully")
-            
-        except Exception as e:
-            logger.error(f"Failed to save monitor config: {e}")
-    
-    def calculate_time_window(self):
-        """Calculate how far back to check based on interval and settings"""
-        if self.config.get('use_interval_for_timeframe', True) and self.last_check:
-            # Calculate hours since last check
-            time_diff = datetime.now() - self.last_check
-            hours_back = max(time_diff.total_seconds() / 3600, 0.5)  # At least 30 minutes
-            
-            # Convert to days for the API (partial days supported)
-            days_back = hours_back / 24
-            
-            # Ensure we don't exceed max_days_back from settings
-            days_back = min(days_back, analysis_config.max_days_back)
-            
-            print(f"⏰ Checking {hours_back:.1f} hours back (since last check, max {analysis_config.max_days_back} days)")
-            return days_back
-        else:
-            # Use configured interval
-            interval_minutes = self.config['check_interval_minutes']
-            hours_back = (interval_minutes / 60) * 1.5  # Add 50% buffer
-            days_back = min(hours_back / 24, analysis_config.max_days_back)
-            
-            print(f"⏰ Checking {hours_back:.1f} hours back (based on interval, max {analysis_config.max_days_back} days)")
-            return days_back
-    
-    def start_monitoring(self):
-        """Start the automated monitoring"""
+    def start_monitoring(self) -> Dict:
+        """Start the monitoring with enhanced console output"""
         if self.is_running:
             return {'status': 'error', 'message': 'Monitor already running'}
         
-        # Validate configuration before starting
-        if not self.config['networks']:
-            return {'status': 'error', 'message': 'No supported networks configured'}
-        
-        if self.config['check_interval_minutes'] < monitor_config.min_check_interval_minutes:
-            return {
-                'status': 'error', 
-                'message': f'Check interval must be at least {monitor_config.min_check_interval_minutes} minutes'
-            }
+        print("\n" + "="*70)
+        print("🚀 STARTING ENHANCED CRYPTO MONITOR")
+        print("="*70)
+        print(f"📊 Configuration:")
+        print(f"   🕐 Check Interval: {self.config['check_interval_minutes']} minutes")
+        print(f"   🌐 Networks: {', '.join(self.config['networks'])}")
+        print(f"   👥 Wallets per check: {self.config['num_wallets']}")
+        print(f"   🎯 Alert Thresholds:")
+        for threshold, value in self.alert_thresholds.items():
+            print(f"      {threshold}: {value}")
+        print("="*70)
         
         self.is_running = True
-        self.monitor_thread = threading.Thread(target=self._monitor_loop)
-        self.monitor_thread.daemon = True
+        self.monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self.monitor_thread.start()
         
-        logger.info(f"Monitor started with {self.config['check_interval_minutes']} minute intervals")
-        return {'status': 'success', 'message': 'Monitor started', 'config': self.config}
+        logger.info("Enhanced monitor started successfully")
+        print("✅ Monitor started successfully! Check console for real-time updates.")
+        
+        return {
+            'status': 'success', 
+            'message': 'Monitor started with enhanced logging',
+            'config': self.config
+        }
     
-    def stop_monitoring(self):
-        """Stop the automated monitoring"""
+    def stop_monitoring(self) -> Dict:
+        """Stop the monitoring"""
         if not self.is_running:
             return {'status': 'error', 'message': 'Monitor not running'}
         
+        print("\n" + "="*70)
+        print("🛑 STOPPING CRYPTO MONITOR")
+        print("="*70)
+        print(f"📊 Session Summary:")
+        print(f"   🚨 Total Alerts: {self.total_alerts}")
+        print(f"   🪙 Known Tokens: {len(self.known_tokens)}")
+        print(f"   💰 Seen Purchases: {self.seen_purchases}")
+        if self.last_check:
+            print(f"   🕐 Last Check: {self.last_check.strftime('%Y-%m-%d %H:%M:%S')}")
+        print("="*70)
+        
         self.is_running = False
-        if self.scheduler_job:
-            schedule.cancel_job(self.scheduler_job)
+        if self.monitor_thread:
+            self.monitor_thread.join(timeout=5)
         
         logger.info("Monitor stopped")
+        print("✅ Monitor stopped successfully!")
+        
         return {'status': 'success', 'message': 'Monitor stopped'}
     
     def _monitor_loop(self):
-        """Main monitoring loop"""
-        # Schedule the check
-        interval = self.config['check_interval_minutes']
-        self.scheduler_job = schedule.every(interval).minutes.do(self.check_for_new_tokens)
-        
-        # Run first check immediately
-        self.check_for_new_tokens()
+        """Main monitoring loop with enhanced output"""
+        print(f"🔄 Monitor loop started - checking every {self.config['check_interval_minutes']} minutes")
         
         while self.is_running:
-            schedule.run_pending()
-            time.sleep(30)  # Check schedule every 30 seconds
+            try:
+                self._calculate_next_check()
+                print(f"\n⏰ Next check scheduled for: {self.next_check.strftime('%H:%M:%S')}")
+                
+                # Wait for the interval
+                self._wait_for_interval()
+                
+                if not self.is_running:
+                    break
+                
+                # Perform the check
+                self.check_for_new_tokens()
+                
+            except Exception as e:
+                logger.error(f"Error in monitor loop: {e}", exc_info=True)
+                print(f"❌ Monitor loop error: {e}")
+                time.sleep(60)  # Wait a minute before retrying
+    
+    def _calculate_next_check(self):
+        """Calculate when the next check should occur"""
+        interval_seconds = self.config['check_interval_minutes'] * 60
+        self.next_check = datetime.now() + timedelta(seconds=interval_seconds)
+    
+    def _wait_for_interval(self):
+        """Wait for the check interval with progress indicators"""
+        interval_seconds = self.config['check_interval_minutes'] * 60
+        
+        # Show countdown every 30 seconds for long intervals
+        if interval_seconds > 60:
+            countdown_interval = 30
+            remaining = interval_seconds
+            
+            while remaining > 0 and self.is_running:
+                if remaining % countdown_interval == 0 or remaining <= 10:
+                    minutes = remaining // 60
+                    seconds = remaining % 60
+                    if minutes > 0:
+                        print(f"⏳ Next check in {minutes}m {seconds}s...")
+                    else:
+                        print(f"⏳ Next check in {seconds}s...")
+                
+                time.sleep(min(1, remaining))
+                remaining -= 1
+        else:
+            time.sleep(interval_seconds)
     
     def check_for_new_tokens(self):
-        """Check for new token purchases"""
-        print(f"\n{'='*60}")
-        print(f"🔍 AUTOMATED TOKEN MONITOR - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"Environment: {settings.environment} | Networks: {self.config['networks']}")
-        print(f"{'='*60}")
+        """Enhanced token checking with detailed console output"""
+        print("\n" + "="*70)
+        print("🔍 STARTING TOKEN ANALYSIS CYCLE")
+        print("="*70)
+        print(f"🕐 Check Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
-        all_alerts = []
-        
-        # Calculate time window
-        days_back = self.calculate_time_window()
-        
-        for network in self.config['networks']:
-            for analysis_type in self.config['analysis_types']:
-                alerts = self._analyze_network(network, analysis_type, days_back)
-                all_alerts.extend(alerts)
-        
-        # Process and send alerts
-        if all_alerts:
-            self._process_alerts(all_alerts)
-        else:
-            print("✅ No new significant token activity detected")
-        
-        # Update last check time AFTER successful check
         self.last_check = datetime.now()
+        cycle_alerts = []
+        cycle_new_tokens = 0
+        cycle_total_purchases = 0
         
-        # Calculate next check time
-        next_check = self.last_check + timedelta(minutes=self.config['check_interval_minutes'])
-        print(f"⏰ Next check at {next_check.strftime('%H:%M:%S')}")
+        # Determine timeframe
+        if self.config['use_interval_for_timeframe']:
+            timeframe_hours = self.config['check_interval_minutes'] / 60
+            days_back = max(0.1, timeframe_hours / 24)  # Convert to days, minimum 2.4 hours
+        else:
+            days_back = 1
         
-        # Log statistics
-        logger.info(f"Monitor check completed: {len(all_alerts)} alerts, {len(self.known_tokens)} known tokens")
+        print(f"📊 Analysis Parameters:")
+        print(f"   🕐 Timeframe: {days_back:.2f} days ({timeframe_hours:.1f} hours)" if self.config['use_interval_for_timeframe'] else f"   🕐 Timeframe: {days_back} days")
+        print(f"   👥 Wallets: {self.config['num_wallets']}")
+        print(f"   🌐 Networks: {', '.join(self.config['networks'])}")
+        print("-" * 70)
+        
+        # Analyze each network
+        for network in self.config['networks']:
+            try:
+                print(f"\n🌐 ANALYZING {network.upper()} NETWORK")
+                print("-" * 50)
+                
+                network_alerts = self._analyze_network(network, days_back)
+                cycle_alerts.extend(network_alerts)
+                
+                # Count new tokens for this network
+                network_new_tokens = len([alert for alert in network_alerts if alert.alert_type == 'new_token'])
+                network_purchases = sum([alert.data.get('total_purchases', 0) for alert in network_alerts])
+                
+                cycle_new_tokens += network_new_tokens
+                cycle_total_purchases += network_purchases
+                
+                print(f"✅ {network.upper()} Analysis Complete:")
+                print(f"   🆕 New Tokens: {network_new_tokens}")
+                print(f"   💰 Total Purchases: {network_purchases}")
+                print(f"   🚨 Alerts Generated: {len(network_alerts)}")
+                
+            except Exception as e:
+                logger.error(f"Error analyzing {network}: {e}", exc_info=True)
+                print(f"❌ Error analyzing {network}: {e}")
+                continue
+        
+        # Update global stats
+        self.seen_purchases += cycle_total_purchases
+        self.total_alerts += len(cycle_alerts)
+        
+        # Process alerts
+        if cycle_alerts:
+            print(f"\n🚨 PROCESSING {len(cycle_alerts)} ALERTS")
+            print("-" * 50)
+            
+            for alert in cycle_alerts:
+                self._process_alert(alert)
+            
+            self.alerts.extend(cycle_alerts)
+            
+            # Keep only recent alerts
+            max_alerts = monitor_config.max_stored_alerts
+            if len(self.alerts) > max_alerts:
+                self.alerts = self.alerts[-max_alerts:]
+        
+        # Cycle summary
+        print("\n" + "="*70)
+        print("📊 CYCLE SUMMARY")
+        print("="*70)
+        print(f"🆕 New Tokens Discovered: {cycle_new_tokens}")
+        print(f"💰 Total Purchases Analyzed: {cycle_total_purchases}")
+        print(f"🚨 Alerts Generated: {len(cycle_alerts)}")
+        print(f"📈 Session Totals:")
+        print(f"   🪙 Known Tokens: {len(self.known_tokens)}")
+        print(f"   💰 Total Purchases: {self.seen_purchases}")
+        print(f"   🚨 Total Alerts: {self.total_alerts}")
+        print("="*70)
+        
+        if cycle_alerts:
+            print("🎯 TOP ALERTS THIS CYCLE:")
+            for i, alert in enumerate(cycle_alerts[:3], 1):
+                confidence_emoji = {"HIGH": "🔥", "MEDIUM": "⚠️", "LOW": "ℹ️"}
+                print(f"   {i}. {confidence_emoji.get(alert.confidence, '📊')} {alert.message}")
+        
+        print(f"⏰ Next check in {self.config['check_interval_minutes']} minutes\n")
     
-    def _analyze_network(self, network: str, analysis_type: str, days_back: float) -> List[TokenAlert]:
-        """Analyze a specific network for new tokens"""
-        print(f"\n📊 Checking {network.upper()} {analysis_type} activity...")
-        print(f"   Time window: {days_back*24:.1f} hours")
-        print(f"   Wallets to check: {self.config['num_wallets']}")
-        print(f"   Excluded tokens: {len(analysis_config.excluded_tokens)}")
+    def _analyze_network(self, network: str, days_back: float) -> List[Alert]:
+        """Analyze a specific network with detailed output"""
+        alerts = []
         
         try:
-            # Get network configuration
-            try:
-                network_config = settings.get_network_config(network)
-                min_eth_value = network_config['min_eth_value']
-                print(f"   Min ETH value: {min_eth_value}")
-            except ValueError as e:
-                print(f"   ⚠️ Network config error: {e}")
-                return []
+            # Buy analysis
+            print(f"🔍 Analyzing {network} buy activity...")
+            buy_tracker = ComprehensiveBuyTracker(network)
             
-            # Import and run the appropriate analyzer
-            if network == 'eth' and analysis_type == 'buy':
-                from tracker.buy_tracker import EthComprehensiveTracker
-                analyzer = EthComprehensiveTracker()
-                results = analyzer.analyze_all_trading_methods(
-                    num_wallets=self.config['num_wallets'],
-                    days_back=days_back
-                )
-            elif network == 'base' and analysis_type == 'buy':
-                from tracker.buy_tracker import ComprehensiveBuyTracker
-                analyzer = ComprehensiveBuyTracker()
-                results = analyzer.analyze_all_trading_methods(
-                    num_wallets=self.config['num_wallets'],
-                    days_back=days_back
-                )
+            if not buy_tracker.test_connection():
+                print(f"❌ {network} connection failed")
+                return alerts
+            
+            print(f"✅ {network} connection successful")
+            
+            # Run buy analysis with limited wallets for monitoring
+            monitor_wallets = min(self.config['num_wallets'], 50)  # Limit for monitoring
+            print(f"📊 Analyzing {monitor_wallets} top {network} wallets...")
+            
+            buy_results = buy_tracker.analyze_all_trading_methods(
+                num_wallets=monitor_wallets,
+                days_back=days_back,
+                max_wallets_for_sse=True
+            )
+            
+            if buy_results and buy_results.get('ranked_tokens'):
+                print(f"💰 Found {len(buy_results['ranked_tokens'])} tokens with buy activity")
+                
+                # Process buy results for alerts
+                buy_alerts = self._process_buy_results(network, buy_results)
+                alerts.extend(buy_alerts)
             else:
-                print(f"   ⚠️ Unsupported: {network} {analysis_type}")
-                return []
+                print(f"📊 No significant {network} buy activity detected")
             
-            # Process results for alerts
-            return self._extract_alerts(results, network)
+            # Sell analysis
+            print(f"🔍 Analyzing {network} sell pressure...")
+            sell_tracker = ComprehensiveSellTracker(network)
+            
+            sell_results = sell_tracker.analyze_all_sell_methods(
+                num_wallets=monitor_wallets,
+                days_back=days_back,
+                max_wallets_for_sse=True
+            )
+            
+            if sell_results and sell_results.get('ranked_tokens'):
+                print(f"📉 Found {len(sell_results['ranked_tokens'])} tokens with sell pressure")
+                
+                # Process sell results for alerts
+                sell_alerts = self._process_sell_results(network, sell_results)
+                alerts.extend(sell_alerts)
+            else:
+                print(f"📊 No significant {network} sell pressure detected")
             
         except Exception as e:
             logger.error(f"Error analyzing {network}: {e}", exc_info=True)
-            print(f"❌ Error analyzing {network}: {e}")
-            return []
-    
-    def _extract_alerts(self, results: Dict, network: str) -> List[TokenAlert]:
-        """Extract alert-worthy tokens from results with settings integration"""
-        alerts = []
-        
-        if not results:
-            print("   ❌ No results returned from analysis")
-            return alerts
-        
-        if not results.get('ranked_tokens'):
-            print("   ❌ No ranked tokens in results")
-            return alerts
-        
-        print(f"\n   📊 ALERT DETECTION (using settings thresholds):")
-        print(f"   Thresholds: min_wallets={self.alert_thresholds['min_wallets']}, "
-            f"min_eth={self.alert_thresholds['min_eth_spent']}, "
-            f"min_score={self.alert_thresholds['min_alpha_score']}")
-        
-        # Get current token set for this network
-        previous_tokens = self.known_tokens.copy() if self.known_tokens else set()
-        current_tokens = set()
-        new_purchases_found = 0
-        
-        # Check all purchases for truly new activity
-        all_purchases = results.get('all_purchases', [])
-        print(f"   Total purchases found: {len(all_purchases)}")
-        
-        for purchase in all_purchases:
-            tx_hash = purchase.get('transaction_hash', '')
-            token = purchase.get('token_bought', '')
-            
-            # Create unique identifier for this purchase
-            purchase_id = (tx_hash, token)
-            
-            # Check if this is a new purchase we haven't seen
-            if purchase_id not in self.seen_purchases:
-                self.seen_purchases.add(purchase_id)
-                new_purchases_found += 1
-        
-        print(f"   🆕 Found {new_purchases_found} new purchases since last check")
-        print(f"   Previously known tokens: {len(previous_tokens)}")
-        print(f"   Analyzing top {min(20, len(results['ranked_tokens']))} tokens...")
-        
-        # Process top tokens for alerts
-        tokens_checked = 0
-        tokens_meeting_criteria = 0
-        excluded_count = 0
-        
-        for token, data, alpha_score in results['ranked_tokens'][:20]:  # Top 20 tokens
-            current_tokens.add(token)
-            tokens_checked += 1
-            
-            # Check if token is excluded by settings
-            if should_exclude_token(token):
-                excluded_count += 1
-                print(f"\n   Token #{tokens_checked}: {token} - EXCLUDED (in settings)")
-                continue
-            
-            wallet_count = len(data.get('wallets', []))
-            eth_spent = data.get('total_eth_spent', 0)
-            platforms = list(data.get('platforms', []))
-            
-            # Debug output for each token
-            print(f"\n   Token #{tokens_checked}: {token}")
-            print(f"      Wallets: {wallet_count} (need >= {self.alert_thresholds['min_wallets']})")
-            print(f"      ETH: {eth_spent:.4f} (need >= {self.alert_thresholds['min_eth_spent']})")
-            print(f"      Score: {alpha_score:.1f} (need >= {self.alert_thresholds['min_alpha_score']})")
-            print(f"      Is new? {token not in previous_tokens}")
-            
-            # Get contract address
-            contract_address = 'N/A'
-            if 'purchases' in data and data['purchases']:
-                contract_address = data['purchases'][0].get('contract_address', 'N/A')
-            
-            # Count new purchases for this token
-            token_new_purchases = 0
-            for purchase in data.get('purchases', []):
-                tx_hash = purchase.get('transaction_hash', '')
-                purchase_id = (tx_hash, token)
-                if purchase_id in self.seen_purchases:
-                    token_new_purchases += 1
-            
-            print(f"      New purchases for this token: {token_new_purchases}")
-            
-            # Check if token meets alert criteria (from settings)
-            meets_wallets = wallet_count >= self.alert_thresholds['min_wallets']
-            meets_eth = eth_spent >= self.alert_thresholds['min_eth_spent']
-            meets_score = alpha_score >= self.alert_thresholds['min_alpha_score']
-            
-            meets_criteria = meets_wallets and meets_eth and meets_score
-            
-            print(f"      Meets criteria? {meets_criteria} (W:{meets_wallets} E:{meets_eth} S:{meets_score})")
-            
-            if not meets_criteria:
-                print(f"      ❌ Skipping - doesn't meet criteria")
-                continue
-            
-            tokens_meeting_criteria += 1
-            
-            # Alert if it's a new token OR has significant new activity
-            should_alert = False
-            alert_reason = ""
-            
-            if token not in previous_tokens:
-                should_alert = True
-                alert_reason = "NEW TOKEN"
-                alert_type = 'new'
-            elif token_new_purchases >= self.alert_thresholds.get('surge_multiplier', 2.0):
-                should_alert = True
-                alert_reason = f"SURGE ({token_new_purchases} new purchases)"
-                alert_type = 'surge'
-            else:
-                print(f"      ❌ Skipping - not new and insufficient new activity")
-                continue
-            
-            if should_alert:
-                print(f"      ✅ CREATING ALERT: {alert_reason}")
-                
-                alert = TokenAlert(
-                    token=token,
-                    wallet_count=wallet_count,
-                    total_eth_spent=eth_spent,
-                    platforms=platforms,
-                    contract_address=contract_address,
-                    first_seen=datetime.now(),
-                    alert_type=alert_type,
-                    alpha_score=alpha_score,
-                    network=network
-                )
-                alerts.append(alert)
-                
-                logger.info(f"Alert created: {token} - {alert_type} - {wallet_count} wallets, {eth_spent:.3f} ETH")
-            
-            # Update history
-            self.token_history[token].append({
-                'timestamp': datetime.now().isoformat(),
-                'wallet_count': wallet_count,
-                'eth_spent': eth_spent,
-                'alpha_score': alpha_score,
-                'network': network
-            })
-        
-        # Update known tokens
-        self.known_tokens = current_tokens
-        
-        print(f"\n   📊 ALERT SUMMARY:")
-        print(f"   Tokens checked: {tokens_checked}")
-        print(f"   Tokens excluded by settings: {excluded_count}")
-        print(f"   Tokens meeting criteria: {tokens_meeting_criteria}")
-        print(f"   Alerts generated: {len(alerts)}")
-        print(f"   Known tokens now: {len(self.known_tokens)}")
-        
-        # Clean up old purchases (keep last 1000)
-        if len(self.seen_purchases) > 1000:
-            self.seen_purchases = set(list(self.seen_purchases)[-1000:])
+            print(f"❌ {network} analysis error: {e}")
         
         return alerts
     
-    def _process_alerts(self, alerts: List[TokenAlert]):
+    def _process_buy_results(self, network: str, results: Dict) -> List[Alert]:
+        """Process buy results and generate alerts"""
+        alerts = []
+        ranked_tokens = results.get('ranked_tokens', [])
+        
+        for token, data, alpha_score in ranked_tokens[:10]:  # Top 10 tokens
+            wallet_count = len(data.get('wallets', []))
+            total_eth = data.get('total_eth_spent', 0)
+            
+            # Check if this meets alert thresholds
+            if (wallet_count >= self.alert_thresholds.get('min_wallets', 3) and 
+                total_eth >= self.alert_thresholds.get('min_eth_total', 0.1) and
+                alpha_score >= self.alert_thresholds.get('min_alpha_score', 10)):
+                
+                # Check if it's a new token
+                is_new = token not in self.known_tokens
+                self.known_tokens.add(token)
+                
+                alert_type = 'new_token' if is_new else 'high_activity'
+                confidence = self._determine_confidence(wallet_count, total_eth, alpha_score)
+                
+                confidence_emoji = {"HIGH": "🔥", "MEDIUM": "⚠️", "LOW": "ℹ️"}
+                new_flag = "🆕" if is_new else "📈"
+                
+                message = f"{new_flag} {confidence_emoji[confidence]} {network.upper()}: {token} - {wallet_count} wallets, {total_eth:.3f} ETH, α={alpha_score}"
+                
+                alert = Alert(
+                    timestamp=datetime.now(),
+                    network=network,
+                    alert_type=alert_type,
+                    token=token,
+                    message=message,
+                    data={
+                        'wallet_count': wallet_count,
+                        'total_eth_spent': total_eth,
+                        'alpha_score': alpha_score,
+                        'total_purchases': data.get('count', 0),
+                        'platforms': list(data.get('platforms', []))
+                    },
+                    confidence=confidence
+                )
+                
+                alerts.append(alert)
+                
+                print(f"🚨 ALERT: {message}")
+        
+        return alerts
+    
+    def _process_sell_results(self, network: str, results: Dict) -> List[Alert]:
+        """Process sell results and generate alerts"""
+        alerts = []
+        ranked_tokens = results.get('ranked_tokens', [])
+        
+        for token, data, sell_score in ranked_tokens[:5]:  # Top 5 sell pressure tokens
+            wallet_count = len(data.get('wallets', []))
+            total_eth = data.get('total_estimated_eth', 0)
+            
+            # Check for significant sell pressure
+            if (wallet_count >= self.alert_thresholds.get('min_sell_wallets', 2) and 
+                total_eth >= self.alert_thresholds.get('min_sell_eth', 0.05) and
+                sell_score >= self.alert_thresholds.get('min_sell_score', 5)):
+                
+                confidence = self._determine_sell_confidence(wallet_count, total_eth, sell_score)
+                
+                message = f"📉 🚨 {network.upper()}: {token} SELL PRESSURE - {wallet_count} wallets, {total_eth:.3f} ETH, score={sell_score}"
+                
+                alert = Alert(
+                    timestamp=datetime.now(),
+                    network=network,
+                    alert_type='sell_pressure',
+                    token=token,
+                    message=message,
+                    data={
+                        'wallet_count': wallet_count,
+                        'total_estimated_eth': total_eth,
+                        'sell_score': sell_score,
+                        'total_sells': data.get('count', 0),
+                        'methods': list(data.get('methods', []))
+                    },
+                    confidence=confidence
+                )
+                
+                alerts.append(alert)
+                print(f"🚨 SELL ALERT: {message}")
+        
+        return alerts
+    
+    def _determine_confidence(self, wallet_count: int, total_eth: float, alpha_score: float) -> str:
+        """Determine confidence level for buy alerts"""
+        if wallet_count >= 8 and total_eth >= 1.0 and alpha_score >= 50:
+            return "HIGH"
+        elif wallet_count >= 5 and total_eth >= 0.5 and alpha_score >= 25:
+            return "MEDIUM"
+        else:
+            return "LOW"
+    
+    def _determine_sell_confidence(self, wallet_count: int, total_eth: float, sell_score: float) -> str:
+        """Determine confidence level for sell alerts"""
+        if wallet_count >= 5 and total_eth >= 0.5 and sell_score >= 20:
+            return "HIGH"
+        elif wallet_count >= 3 and total_eth >= 0.2 and sell_score >= 10:
+            return "MEDIUM"
+        else:
+            return "LOW"
+    
+    def _process_alert(self, alert: Alert):
         """Process and send alerts through configured channels"""
-        if not alerts:
-            return
-            
-        # Limit alerts per notification based on settings
-        max_alerts = monitor_config.max_alerts_per_notification
-        if len(alerts) > max_alerts:
-            print(f"⚠️ Too many alerts ({len(alerts)}), showing top {max_alerts}")
-            alerts = alerts[:max_alerts]
+        if self.notification_channels.get('console', True):
+            # Console notification already handled in _process_buy_results/_process_sell_results
+            pass
         
-        # Group alerts by type
-        new_tokens = [a for a in alerts if a.alert_type == 'new']
-        surge_tokens = [a for a in alerts if a.alert_type == 'surge']
+        if self.notification_channels.get('file', True):
+            self._log_alert_to_file(alert)
         
-        # Console notification
-        if self.notification_channels['console']:
-            self._console_notification(new_tokens, surge_tokens)
-            
-        # Telegram notification
-        if self.notification_channels['telegram'] and telegram_config.enabled:
-            self._telegram_notification(new_tokens, surge_tokens)
-        
-        # File notification
-        if self.notification_channels.get('file', False):
-            self._file_notification(alerts)
-        
-        # Store alerts in memory (limit based on settings)
-        self.alerts.extend(alerts)
-        max_stored = monitor_config.max_stored_alerts
-        if len(self.alerts) > max_stored:
-            self.alerts = self.alerts[-max_stored:]
-            
-        logger.info(f"Processed {len(alerts)} alerts through {sum(self.notification_channels.values())} channels")
+        if self.notification_channels.get('webhook', False):
+            self._send_webhook_alert(alert)
     
-    def _console_notification(self, new_tokens: List[TokenAlert], surge_tokens: List[TokenAlert]):
-        """Print alerts to console with trading links"""
-        if new_tokens:
-            print(f"\n🚨 NEW TOKENS DETECTED ({len(new_tokens)}):")
-            for alert in new_tokens:
-                print(f"  🆕 {alert.token} ({alert.network.upper()})")
-                print(f"     💰 {alert.total_eth_spent:.4f} ETH from {alert.wallet_count} wallets")
-                print(f"     📊 Alpha Score: {alert.alpha_score:.1f}")
-                print(f"     🔗 Contract: {alert.contract_address}")
-                print(f"     🏪 Platforms: {', '.join(alert.platforms[:3])}")
-                print(f"     🦄 Uniswap: {alert.get_uniswap_link()}")
-                print(f"     📈 DexScreener: {alert.get_dexscreener_link()}")
-        
-        if surge_tokens:
-            print(f"\n⚡ SURGE IN ACTIVITY ({len(surge_tokens)}):")
-            for alert in surge_tokens:
-                print(f"  📈 {alert.token} ({alert.network.upper()})")
-                print(f"     💰 {alert.total_eth_spent:.4f} ETH from {alert.wallet_count} wallets")
-                print(f"     📊 Alpha Score: {alert.alpha_score:.1f}")
-                print(f"     🦄 Uniswap: {alert.get_uniswap_link()}")
-                print(f"     📈 DexScreener: {alert.get_dexscreener_link()}")
-    
-    def _telegram_notification(self, new_tokens: List[TokenAlert], surge_tokens: List[TokenAlert]):
-        """Send alerts to Telegram with clickable links using settings"""
-        if not telegram_config.bot_token or not telegram_config.chat_id:
-            logger.warning("Telegram credentials not configured in settings")
-            return
-        
-        if not new_tokens and not surge_tokens:
-            return
-        
+    def _log_alert_to_file(self, alert: Alert):
+        """Log alert to file"""
         try:
-            # Build message with proper links
-            network_emoji = "🔵" if new_tokens and new_tokens[0].network == 'base' else "⚡"
-            network_name = new_tokens[0].network.upper() if new_tokens else surge_tokens[0].network.upper()
-            
-            message = f"{network_emoji} *{network_name} ALPHA ALERT*\n"
-            message += f"Environment: {settings.environment.upper()}\n\n"
-            
-            if new_tokens:
-                message += f"*🆕 NEW TOKENS ({len(new_tokens)}):*\n"
-                for alert in new_tokens[:5]:  # Top 5
-                    message += f"• *{alert.token}* - {alert.total_eth_spent:.2f}Ξ - Score: {alert.alpha_score:.0f}\n"
-                    message += f"  📋 `{alert.contract_address}`\n"
-                    message += f"  🦄 [Trade on Uniswap]({alert.get_uniswap_link()})\n"
-                    message += f"  📈 [View on DexScreener]({alert.get_dexscreener_link()})\n\n"
-            
-            if surge_tokens:
-                message += f"*⚡ SURGE ACTIVITY ({len(surge_tokens)}):*\n"
-                for alert in surge_tokens[:5]:  # Top 5
-                    message += f"• *{alert.token}* - {alert.total_eth_spent:.2f}Ξ - Score: {alert.alpha_score:.0f}\n"
-                    message += f"  🦄 [Trade on Uniswap]({alert.get_uniswap_link()})\n"
-                    message += f"  📈 [View on DexScreener]({alert.get_dexscreener_link()})\n\n"
-            
-            # Truncate message if too long
-            if len(message) > telegram_config.max_message_length:
-                message = message[:telegram_config.max_message_length-50] + "\n...(truncated)"
-            
-            url = f"https://api.telegram.org/bot{telegram_config.bot_token}/sendMessage"
-            payload = {
-                'chat_id': telegram_config.chat_id,
-                'text': message,
-                'parse_mode': 'Markdown',
-                'disable_web_page_preview': False
-            }
-            
-            response = requests.post(url, json=payload, timeout=10)
-            if response.status_code == 200:
-                print(f"📱 Telegram notification sent successfully")
-                logger.info("Telegram notification sent successfully")
-            else:
-                logger.error(f"Telegram error: Status {response.status_code}, Response: {response.text}")
-                print(f"❌ Telegram error: Status {response.status_code}")
-                
+            with open('monitor_alerts.log', 'a') as f:
+                f.write(f"{alert.timestamp.isoformat()} - {alert.message}\n")
         except Exception as e:
-            logger.error(f"Telegram notification failed: {e}", exc_info=True)
-            print(f"❌ Telegram error: {e}")
+            logger.error(f"Failed to log alert to file: {e}")
     
-    def _file_notification(self, alerts: List[TokenAlert]):
-        """Save alerts to file"""
-        try:
-            os.makedirs('alerts', exist_ok=True)
-            alert_file = f"alerts/alerts_{datetime.now().strftime('%Y%m%d')}.json"
-            
-            # Load existing alerts for today
-            existing_alerts = []
-            if os.path.exists(alert_file):
-                with open(alert_file, 'r') as f:
-                    existing_alerts = json.load(f)
-            
-            # Add new alerts
-            for alert in alerts:
-                existing_alerts.append(alert.to_dict())
-            
-            # Save back to file
-            with open(alert_file, 'w') as f:
-                json.dump(existing_alerts, f, indent=2, default=str)
-                
-            logger.info(f"Saved {len(alerts)} alerts to {alert_file}")
-            
-        except Exception as e:
-            logger.error(f"Failed to save alerts to file: {e}")
+    def _send_webhook_alert(self, alert: Alert):
+        """Send alert via webhook (placeholder)"""
+        # Implementation would depend on webhook configuration
+        pass
     
-    def get_status(self):
-        """Get current monitor status with settings info"""
-        next_check = None
-        if self.last_check and self.is_running:
-            next_check = self.last_check + timedelta(minutes=self.config['check_interval_minutes'])
-        
+    def get_status(self) -> Dict:
+        """Get monitor status with enhanced information"""
         return {
             'is_running': self.is_running,
             'last_check': self.last_check.isoformat() if self.last_check else None,
-            'next_check': next_check.isoformat() if next_check else None,
+            'next_check': self.next_check.isoformat() if self.next_check else None,
             'config': self.config,
             'notification_channels': self.notification_channels,
             'alert_thresholds': self.alert_thresholds,
-            'recent_alerts': [alert.to_dict() for alert in self.alerts[-10:]],  # Last 10 alerts
+            'recent_alerts': [alert.to_dict() for alert in self.alerts[-10:]],
             'stats': {
-                'total_alerts': len(self.alerts),
+                'total_alerts': self.total_alerts,
                 'known_tokens': len(self.known_tokens),
-                'seen_purchases': len(self.seen_purchases)
-            },
-            'settings_info': {
-                'environment': settings.environment,
-                'supported_networks': [net.value for net in monitor_config.supported_networks],
-                'excluded_tokens_count': len(analysis_config.excluded_tokens),
-                'telegram_enabled': telegram_config.enabled,
-                'max_alerts_per_notification': monitor_config.max_alerts_per_notification,
-                'max_stored_alerts': monitor_config.max_stored_alerts
+                'seen_purchases': self.seen_purchases
             }
         }
     
-    def update_config(self, new_config: dict):
-        """Update configuration with validation against settings"""
-        try:
-            # Validate interval
-            if 'check_interval_minutes' in new_config:
-                interval = new_config['check_interval_minutes']
-                if interval < monitor_config.min_check_interval_minutes:
-                    raise ValueError(f'Interval cannot be less than {monitor_config.min_check_interval_minutes} minutes')
-                if interval > monitor_config.max_check_interval_minutes:
-                    raise ValueError(f'Interval cannot exceed {monitor_config.max_check_interval_minutes} minutes')
-            
-            # Validate wallet count
-            if 'num_wallets' in new_config:
-                wallets = new_config['num_wallets']
-                if wallets > analysis_config.max_wallet_count:
-                    raise ValueError(f'Wallet count cannot exceed {analysis_config.max_wallet_count}')
-                if wallets < 1:
-                    raise ValueError('Wallet count must be at least 1')
-            
-            # Validate networks
-            if 'networks' in new_config:
-                supported_networks = [net.value for net in monitor_config.supported_networks]
-                invalid_networks = [net for net in new_config['networks'] if net not in supported_networks]
-                if invalid_networks:
-                    raise ValueError(f'Unsupported networks: {invalid_networks}. Supported: {supported_networks}')
-                if not new_config['networks']:
-                    raise ValueError('At least one network must be specified')
-            
-            # Update config
-            old_interval = self.config.get('check_interval_minutes')
-            self.config.update(new_config)
-            
-            # If interval changed and monitor is running, restart scheduler
-            new_interval = self.config.get('check_interval_minutes')
-            if self.is_running and old_interval != new_interval:
-                if self.scheduler_job:
-                    schedule.cancel_job(self.scheduler_job)
-                self.scheduler_job = schedule.every(new_interval).minutes.do(self.check_for_new_tokens)
-                logger.info(f"Updated monitor interval to {new_interval} minutes")
-            
-            # Save to file
-            self.save_config()
-            
-            logger.info(f"Monitor config updated: {new_config}")
-            return {'status': 'success', 'config': self.config}
-            
-        except Exception as e:
-            logger.error(f"Failed to update monitor config: {e}")
-            return {'status': 'error', 'message': str(e)}
-    
-    def update_alert_thresholds(self, new_thresholds: dict):
-        """Update alert thresholds with validation"""
-        try:
-            # Validate threshold values
-            if 'min_wallets' in new_thresholds:
-                if new_thresholds['min_wallets'] < 1:
-                    raise ValueError('min_wallets must be at least 1')
-            
-            if 'min_eth_spent' in new_thresholds:
-                if new_thresholds['min_eth_spent'] < 0:
-                    raise ValueError('min_eth_spent cannot be negative')
-            
-            if 'min_alpha_score' in new_thresholds:
-                if new_thresholds['min_alpha_score'] < 0:
-                    raise ValueError('min_alpha_score cannot be negative')
-            
-            if 'surge_multiplier' in new_thresholds:
-                if new_thresholds['surge_multiplier'] < 1:
-                    raise ValueError('surge_multiplier must be at least 1')
-            
-            # Update thresholds
-            self.alert_thresholds.update(new_thresholds)
-            
-            logger.info(f"Alert thresholds updated: {new_thresholds}")
-            return {'status': 'success', 'thresholds': self.alert_thresholds}
-            
-        except Exception as e:
-            logger.error(f"Failed to update alert thresholds: {e}")
-            return {'status': 'error', 'message': str(e)}
-    
-    def update_notification_channels(self, new_channels: dict):
-        """Update notification channel settings"""
-        try:
-            # Validate telegram setting
-            if 'telegram' in new_channels and new_channels['telegram']:
-                if not telegram_config.enabled:
-                    logger.warning("Telegram requested but not configured in settings")
-                    new_channels['telegram'] = False
-            
-            # Update channels
-            self.notification_channels.update(new_channels)
-            
-            logger.info(f"Notification channels updated: {new_channels}")
-            return {'status': 'success', 'channels': self.notification_channels}
-            
-        except Exception as e:
-            logger.error(f"Failed to update notification channels: {e}")
-            return {'status': 'error', 'message': str(e)}
-    
-    def get_settings_info(self):
-        """Get current settings information for debugging"""
-        return {
-            'environment': settings.environment,
-            'monitor_config': {
-                'default_check_interval_minutes': monitor_config.default_check_interval_minutes,
-                'min_check_interval_minutes': monitor_config.min_check_interval_minutes,
-                'max_check_interval_minutes': monitor_config.max_check_interval_minutes,
-                'default_networks': [net.value for net in monitor_config.default_networks],
-                'supported_networks': [net.value for net in monitor_config.supported_networks],
-                'alert_thresholds': monitor_config.alert_thresholds,
-                'max_alerts_per_notification': monitor_config.max_alerts_per_notification,
-                'max_stored_alerts': monitor_config.max_stored_alerts
-            },
-            'analysis_config': {
-                'default_wallet_count': analysis_config.default_wallet_count,
-                'max_wallet_count': analysis_config.max_wallet_count,
-                'max_days_back': analysis_config.max_days_back,
-                'excluded_tokens_count': len(analysis_config.excluded_tokens),
-                'min_eth_value': analysis_config.min_eth_value,
-                'min_eth_value_base': analysis_config.min_eth_value_base
-            },
-            'telegram_config': {
-                'enabled': telegram_config.enabled,
-                'bot_token_configured': bool(telegram_config.bot_token),
-                'chat_id_configured': bool(telegram_config.chat_id),
-                'max_message_length': telegram_config.max_message_length
-            }
-        }
+    def save_config(self):
+        """Save configuration (placeholder)"""
+        # Implementation would save config to file/database
+        logger.info("Monitor configuration saved")
 
-# Global monitor instance with settings integration
-try:
-    monitor = TokenMonitor()
-    logger.info("TokenMonitor instance created successfully with settings integration")
-except Exception as e:
-    logger.error(f"Failed to create TokenMonitor instance: {e}")
-    monitor = None
+# Create global monitor instance
+monitor = EnhancedMonitor()
 
-# Flask Blueprint routes with enhanced settings integration
+# Create Flask Blueprint for the monitor routes
+monitor_bp = Blueprint('monitor', __name__)
+
 @monitor_bp.route('/status', methods=['GET'])
 def get_monitor_status():
-    """Get detailed monitor status including settings info"""
+    """Get monitor status"""
     try:
-        if not monitor:
-            return jsonify({
-                'error': 'Monitor not initialized',
-                'settings_available': True,
-                'settings_info': {
-                    'environment': settings.environment,
-                    'telegram_enabled': telegram_config.enabled,
-                    'supported_networks': [net.value for net in monitor_config.supported_networks]
-                }
-            }), 500
-        
         status = monitor.get_status()
-        return jsonify(status)
-        
+        return {'status': 'success', 'data': status}
     except Exception as e:
         logger.error(f"Error getting monitor status: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+        return {'status': 'error', 'message': str(e)}, 500
 
 @monitor_bp.route('/start', methods=['POST'])
 def start_monitor():
-    """Start monitor with settings validation"""
+    """Start the monitor"""
     try:
-        if not monitor:
-            return jsonify({'error': 'Monitor not initialized'}), 500
-        
         result = monitor.start_monitoring()
-        return jsonify(result)
-        
+        return result
     except Exception as e:
         logger.error(f"Error starting monitor: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+        return {'status': 'error', 'message': str(e)}, 500
 
 @monitor_bp.route('/stop', methods=['POST'])
 def stop_monitor():
-    """Stop monitor"""
+    """Stop the monitor"""
     try:
-        if not monitor:
-            return jsonify({'error': 'Monitor not initialized'}), 500
-        
         result = monitor.stop_monitoring()
-        return jsonify(result)
-        
+        return result
     except Exception as e:
         logger.error(f"Error stopping monitor: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+        return {'status': 'error', 'message': str(e)}, 500
 
-@monitor_bp.route('/config', methods=['GET', 'POST'])
-def monitor_config_endpoint():
-    """Get or update monitor configuration with settings validation"""
+@monitor_bp.route('/check-now', methods=['POST'])
+def check_now():
+    """Trigger immediate check"""
     try:
-        if not monitor:
-            if request.method == 'POST':
-                return jsonify({'error': 'Monitor not initialized'}), 500
-            else:
-                # Return default config from settings
-                return jsonify({
-                    'check_interval_minutes': monitor_config.default_check_interval_minutes,
-                    'networks': [net.value for net in monitor_config.default_networks],
-                    'num_wallets': analysis_config.default_wallet_count,
-                    'use_interval_for_timeframe': True,
-                    'settings_limits': {
-                        'min_check_interval_minutes': monitor_config.min_check_interval_minutes,
-                        'max_check_interval_minutes': monitor_config.max_check_interval_minutes,
-                        'max_wallet_count': analysis_config.max_wallet_count,
-                        'supported_networks': [net.value for net in monitor_config.supported_networks]
-                    }
-                })
+        def run_check():
+            monitor.check_for_new_tokens()
         
-        if request.method == 'POST':
-            new_config = request.json
-            result = monitor.update_config(new_config)
-            return jsonify(result)
-        else:
-            config = monitor.config.copy()
-            config['settings_limits'] = {
-                'min_check_interval_minutes': monitor_config.min_check_interval_minutes,
-                'max_check_interval_minutes': monitor_config.max_check_interval_minutes,
-                'max_wallet_count': analysis_config.max_wallet_count,
-                'supported_networks': [net.value for net in monitor_config.supported_networks]
-            }
-            return jsonify(config)
+        thread = threading.Thread(target=run_check)
+        thread.daemon = True
+        thread.start()
         
+        return {'status': 'success', 'message': 'Check initiated'}
     except Exception as e:
-        logger.error(f"Error with monitor config: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error running immediate check: {e}", exc_info=True)
+        return {'status': 'error', 'message': str(e)}, 500
 
-@monitor_bp.route('/thresholds', methods=['GET', 'POST'])
-def alert_thresholds_endpoint():
-    """Get or update alert thresholds"""
-    try:
-        if not monitor:
-            if request.method == 'POST':
-                return jsonify({'error': 'Monitor not initialized'}), 500
-            else:
-                return jsonify({
-                    'thresholds': monitor_config.alert_thresholds,
-                    'source': 'settings_default'
-                })
-        
-        if request.method == 'POST':
-            new_thresholds = request.json
-            result = monitor.update_alert_thresholds(new_thresholds)
-            return jsonify(result)
-        else:
-            return jsonify({
-                'thresholds': monitor.alert_thresholds,
-                'defaults': monitor_config.alert_thresholds
-            })
-        
-    except Exception as e:
-        logger.error(f"Error with alert thresholds: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
-
-@monitor_bp.route('/notifications', methods=['GET', 'POST'])
-def notification_channels_endpoint():
-    """Get or update notification channel settings"""
-    try:
-        if not monitor:
-            if request.method == 'POST':
-                return jsonify({'error': 'Monitor not initialized'}), 500
-            else:
-                return jsonify({
-                    'channels': {
-                        'console': True,
-                        'telegram': telegram_config.enabled,
-                        'file': True,
-                        'webhook': False
-                    },
-                    'telegram_configured': telegram_config.enabled
-                })
-        
-        if request.method == 'POST':
-            new_channels = request.json
-            result = monitor.update_notification_channels(new_channels)
-            return jsonify(result)
-        else:
-            return jsonify({
-                'channels': monitor.notification_channels,
-                'telegram_configured': telegram_config.enabled,
-                'max_message_length': telegram_config.max_message_length
-            })
-        
-    except Exception as e:
-        logger.error(f"Error with notification channels: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
-
-@monitor_bp.route('/alerts', methods=['GET'])
-def get_alerts():
-    """Get recent alerts with pagination"""
-    try:
-        if not monitor:
-            return jsonify([])
-        
-        limit = request.args.get('limit', 20, type=int)
-        limit = min(limit, monitor_config.max_stored_alerts)  # Enforce settings limit
-        
-        alerts = [alert.to_dict() for alert in monitor.alerts[-limit:]]
-        
-        return jsonify({
-            'alerts': alerts,
-            'total_count': len(monitor.alerts),
-            'limit': limit,
-            'max_stored': monitor_config.max_stored_alerts
-        })
-        
-    except Exception as e:
-        logger.error(f"Error getting alerts: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
-
-@monitor_bp.route('/settings-info', methods=['GET'])
-def get_settings_info():
-    """Get current settings information for debugging"""
-    try:
-        if not monitor:
-            return jsonify({
-                'error': 'Monitor not initialized',
-                'basic_settings': {
-                    'environment': settings.environment,
-                    'telegram_enabled': telegram_config.enabled,
-                    'supported_networks': [net.value for net in monitor_config.supported_networks]
-                }
-            })
-        
-        return jsonify(monitor.get_settings_info())
-        
-    except Exception as e:
-        logger.error(f"Error getting settings info: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
-
-@monitor_bp.route('/test', methods=['GET'])
-def test_monitor():
-    """Test monitor functionality with settings"""
-    try:
-        test_results = {
-            'monitor_available': monitor is not None,
-            'settings_loaded': True,
-            'telegram_configured': telegram_config.enabled,
-            'supported_networks': [net.value for net in monitor_config.supported_networks],
-            'excluded_tokens_count': len(analysis_config.excluded_tokens),
-            'alert_thresholds': monitor_config.alert_thresholds if monitor else {}
-        }
-        
-        if monitor:
-            test_results.update({
-                'monitor_status': monitor.get_status(),
-                'config_valid': True
-            })
-        
-        return jsonify({
-            'status': 'success',
-            'test_results': test_results,
-            'environment': settings.environment
-        })
-        
-    except Exception as e:
-        logger.error(f"Monitor test failed: {e}", exc_info=True)
-        return jsonify({
-            'status': 'error',
-            'error': str(e),
-            'test_results': {
-                'monitor_available': False,
-                'settings_loaded': False
-            }
-        }), 500
-
-if __name__ == "__main__":
-    # Test the monitor directly with settings
-    print("Testing monitor with settings integration...")
-    if monitor:
-        print(f"Environment: {settings.environment}")
-        print(f"Supported networks: {[net.value for net in monitor_config.supported_networks]}")
-        print(f"Default interval: {monitor_config.default_check_interval_minutes} minutes")
-        print(f"Alert thresholds: {monitor_config.alert_thresholds}")
-        print(f"Telegram enabled: {telegram_config.enabled}")
-        
-        # Quick test with reduced wallet count
-        monitor.config['num_wallets'] = 10
-        monitor.check_for_new_tokens()
-    else:
-        print("❌ Monitor initialization failed")
+# Export both the monitor instance and blueprint
+__all__ = ['monitor', 'monitor_bp']

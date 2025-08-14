@@ -17,13 +17,13 @@ from tracker.tracker_utils import BaseTracker, NetworkSpecificMixins
 from tracker.buy_tracker import ComprehensiveBuyTracker
 from tracker.sell_tracker import ComprehensiveSellTracker
 
-
 api_bp = Blueprint('api', __name__)
 service = AnalysisService()
 
 # Configure logger
 logger = logging.getLogger(__name__)
 
+# Global analysis tracking
 analysis_in_progress = {
     'eth_buy': False,
     'eth_sell': False,
@@ -50,24 +50,21 @@ def get_analysis_params():
     """Get analysis parameters from request or use defaults from settings"""
     try:
         # Try to get from request context
-        num_wallets = request.args.get('wallets', analysis_config.default_wallet_count, type=int)
+        num_wallets = request.args.get('wallets', 173, type=int)
         days_back = request.args.get('days', None, type=int)
         network = request.args.get('network', 'base')
     except RuntimeError:
         # Outside request context, use defaults
-        num_wallets = analysis_config.default_wallet_count
+        num_wallets = 173
         days_back = None
         network = 'base'
-    
-    # Apply limits from settings
-    num_wallets = min(num_wallets, analysis_config.max_wallet_count)
     
     # Set default days_back based on network from settings
     if days_back is None:
         try:
             network_config = settings.get_network_config(network)
             days_back = network_config['default_days_back']
-        except:
+        except Exception:
             # Fallback if network config fails
             if network == 'base':
                 days_back = analysis_config.default_days_back_base
@@ -82,135 +79,230 @@ def get_analysis_params():
 
 def should_exclude_token(token_symbol):
     """Check if token should be excluded based on settings"""
+    if not token_symbol:
+        return False
     return token_symbol.upper() in [t.upper() for t in analysis_config.excluded_tokens]
 
-class ConsoleCapture:
-    """Capture console output and send it via SSE"""
+class EnhancedConsoleCapture:
+    """Enhanced console capture that actually works"""
+    
     def __init__(self, message_queue):
         self.message_queue = message_queue
         self.original_stdout = sys.stdout
-        self.capture_buffer = StringIO()
+        self.original_stderr = sys.stderr
+        self.original_print = print
+        self.is_active = True
+        
+        # Override the global print function
+        import builtins
+        builtins.print = self.captured_print
+    
+    def captured_print(self, *args, **kwargs):
+        """Capture print statements and send to SSE"""
+        # Call original print for server logs
+        try:
+            self.original_print(*args, **kwargs)
+        except Exception:
+            pass
+        
+        # Capture for SSE
+        if self.is_active and args:
+            try:
+                message = ' '.join(str(arg) for arg in args)
+                if message.strip():
+                    self._send_to_sse(message.strip())
+            except Exception:
+                pass
     
     def write(self, text):
-        # Write to original stdout
-        self.original_stdout.write(text)
-        
-        # Parse and send to SSE
-        if text.strip():
-            # Determine message type based on content
-            level = 'info'
-            if '✅' in text or 'SUCCESS' in text:
-                level = 'success'
-            elif '⚠️' in text or 'WARNING' in text:
-                level = 'warning'
-            elif '❌' in text or 'ERROR' in text:
-                level = 'error'
-            elif '🚀' in text or '🏆' in text or '💎' in text:
-                level = 'highlight'
+        """Capture stdout/stderr writes"""
+        try:
+            # Always write to original for server logs
+            self.original_stdout.write(text)
+            self.original_stdout.flush()
             
-            # Clean up the text for display
-            display_text = text.strip()
+            # Send to SSE if active
+            if self.is_active and text.strip():
+                self._send_to_sse(text.strip())
+        except Exception:
+            pass
+    
+    def _send_to_sse(self, text):
+        """Send text to SSE with proper formatting"""
+        try:
+            # Determine message level
+            level = self._determine_level(text)
+            
+            # Clean text
+            display_text = self._clean_text(text)
             
             # Send to SSE queue
-            self.message_queue.put({
+            message = {
                 'type': 'console',
                 'message': display_text,
-                'level': level
-            })
+                'level': level,
+                'timestamp': time.time()
+            }
+            
+            # Non-blocking put
+            try:
+                self.message_queue.put_nowait(message)
+            except Exception:
+                # If queue full, skip rather than block
+                pass
+                
+        except Exception:
+            # Don't crash analysis for SSE issues
+            pass
+    
+    def _determine_level(self, text):
+        """Determine log level from text content"""
+        try:
+            text_lower = text.lower()
+            
+            if any(indicator in text for indicator in ['✅', 'SUCCESS', '🚀', '💰', '🪙']):
+                return 'success'
+            elif any(indicator in text for indicator in ['⚠️', 'WARNING', 'WARN']):
+                return 'warning'
+            elif any(indicator in text for indicator in ['❌', 'ERROR', 'FAILED', 'Exception']):
+                return 'error'
+            elif any(indicator in text for indicator in ['🏆', '💎', '🔵', 'BOUGHT', 'SOLD']):
+                return 'highlight'
+            else:
+                return 'info'
+        except Exception:
+            return 'info'
+    
+    def _clean_text(self, text):
+        """Clean text for display"""
+        try:
+            cleaned = ' '.join(text.split())
+            if len(cleaned) > 150:
+                cleaned = cleaned[:147] + "..."
+            return cleaned
+        except Exception:
+            return str(text)[:150]
     
     def flush(self):
-        self.original_stdout.flush()
+        """Flush original streams"""
+        try:
+            self.original_stdout.flush()
+        except Exception:
+            pass
+    
+    def close(self):
+        """Cleanup and restore original print"""
+        try:
+            self.is_active = False
+            import builtins
+            builtins.print = self.original_print
+        except Exception:
+            pass
 
 def generate_sse_stream(network, analysis_type, message_queue, params=None):
-    """Generate SSE stream for real-time console output AND results"""
+    """Generate SSE stream for analysis"""
     analysis_key = f"{network}_{analysis_type}"
-    
+
     # Check if analysis is already running
     global analysis_in_progress
     if analysis_in_progress.get(analysis_key, False):
-        message_queue.put({
-            'type': 'console',
-            'message': 'Analysis already in progress, please wait...',
-            'level': 'warning'
-        })
-        message_queue.put({'type': 'complete', 'status': 'already_running'})
-        
-        def generate():
-            yield f"data: {json.dumps({'type': 'console', 'message': 'Analysis already in progress', 'level': 'warning'})}\n\n"
+        def already_running_generator():
+            yield f"data: {json.dumps({'type': 'console', 'message': 'Analysis already in progress, please wait...', 'level': 'warning'})}\n\n"
             yield f"data: {json.dumps({'type': 'complete', 'status': 'already_running'})}\n\n"
-        return generate()
+        return already_running_generator()
     
     # Mark analysis as in progress
     analysis_in_progress[analysis_key] = True
     
     def run_analysis():
-        # Capture console output
-        console_capture = ConsoleCapture(message_queue)
-        old_stdout = sys.stdout
-        sys.stdout = console_capture
-        
+        """Run the analysis in a separate thread"""
+        console_capture = None
         try:
-            # Use passed parameters or get defaults (not from request context)
+            # Send immediate feedback
+            message_queue.put({
+                'type': 'console',
+                'message': f'🔄 Analysis thread started for {network} {analysis_type}',
+                'level': 'success'
+            })
+            
+            # Get parameters
             if params:
                 num_wallets, days_back = params['num_wallets'], params['days_back']
             else:
                 # Use defaults from settings
-                num_wallets = analysis_config.default_wallet_count
+                num_wallets = 173
                 if network == 'base':
                     days_back = analysis_config.default_days_back_base
                 else:
                     days_back = analysis_config.default_days_back_eth
             
+            message_queue.put({
+                'type': 'console',
+                'message': f'⚙️ Configuration: {num_wallets} wallets, {days_back} days',
+                'level': 'info'
+            })
+            
+            # Setup console capture
+            console_capture = EnhancedConsoleCapture(message_queue)
+            
             # Get network config
             try:
                 network_config = settings.get_network_config(network)
                 min_eth_value = network_config['min_eth_value']
-            except:
+            except Exception:
                 min_eth_value = analysis_config.min_eth_value
             
             logger.info(f"Starting {network} {analysis_type} analysis with {num_wallets} wallets, {days_back} days back, min ETH: {min_eth_value}")
             
             # Import and run the appropriate analyzer
+            results = None
             if network == 'eth' and analysis_type == 'buy':
-                analyzer = ComprehensiveBuyTracker()
+                analyzer = ComprehensiveBuyTracker("ethereum")
                 results = analyzer.analyze_all_trading_methods(
                     num_wallets=num_wallets, 
-                    days_back=days_back
+                    days_back=days_back,
+                    max_wallets_for_sse=False
                 )
             elif network == 'eth' and analysis_type == 'sell':
                 analyzer = ComprehensiveSellTracker("ethereum")
                 results = analyzer.analyze_all_sell_methods(
                     num_wallets=num_wallets, 
-                    days_back=days_back
+                    days_back=days_back,
+                    max_wallets_for_sse=False
                 )
             elif network == 'base' and analysis_type == 'buy':
                 analyzer = ComprehensiveBuyTracker("base")
                 results = analyzer.analyze_all_trading_methods(
                     num_wallets=num_wallets, 
-                    days_back=days_back
+                    days_back=days_back,
+                    max_wallets_for_sse=False
                 )
             elif network == 'base' and analysis_type == 'sell':
                 analyzer = ComprehensiveSellTracker("base")
                 results = analyzer.analyze_all_sell_methods(
                     num_wallets=num_wallets, 
-                    days_back=days_back
+                    days_back=days_back,
+                    max_wallets_for_sse=False
                 )
-            else:
-                results = None
             
             # Filter excluded tokens if results exist
             if results and results.get('ranked_tokens'):
                 filtered_tokens = []
                 for token_tuple in results['ranked_tokens']:
-                    # ranked_tokens is a list of tuples: (token, data, alpha_score)
-                    if isinstance(token_tuple, tuple) and len(token_tuple) >= 3:
-                        token_symbol = token_tuple[0]  # First element is the token symbol
-                        if not should_exclude_token(token_symbol):
-                            filtered_tokens.append(token_tuple)
+                    try:
+                        # ranked_tokens is a list of tuples: (token, data, alpha_score)
+                        if isinstance(token_tuple, tuple) and len(token_tuple) >= 3:
+                            token_symbol = token_tuple[0]  # First element is the token symbol
+                            if not should_exclude_token(token_symbol):
+                                filtered_tokens.append(token_tuple)
+                            else:
+                                logger.debug(f"Excluding token {token_symbol} based on settings")
                         else:
-                            logger.debug(f"Excluding token {token_symbol} based on settings")
-                    else:
-                        # Fallback for unexpected format
+                            # Fallback for unexpected format
+                            filtered_tokens.append(token_tuple)
+                    except Exception as e:
+                        logger.warning(f"Error processing token tuple {token_tuple}: {e}")
+                        # Keep the token if we can't process it
                         filtered_tokens.append(token_tuple)
                 
                 results['ranked_tokens'] = filtered_tokens
@@ -250,7 +342,26 @@ def generate_sse_stream(network, analysis_type, message_queue, params=None):
             
         except Exception as e:
             logger.error(f"Analysis error: {e}", exc_info=True)
-            print(f"❌ Error during analysis: {e}")
+            # Send detailed error info via SSE
+            message_queue.put({
+                'type': 'console',
+                'message': f'❌ Detailed error: {str(e)}',
+                'level': 'error'
+            })
+            
+            # Send traceback lines
+            try:
+                tb_lines = traceback.format_exc().split('\n')[-5:]  # Last 5 lines
+                for line in tb_lines:
+                    if line.strip():
+                        message_queue.put({
+                            'type': 'console',
+                            'message': f'🔍 {line.strip()}',
+                            'level': 'error'
+                        })
+            except Exception:
+                pass
+            
             message_queue.put({
                 'type': 'console',
                 'message': f'Error: {str(e)}',
@@ -259,8 +370,9 @@ def generate_sse_stream(network, analysis_type, message_queue, params=None):
             message_queue.put({'type': 'complete', 'status': 'error', 'error': str(e)})
         
         finally:
-            # Restore stdout
-            sys.stdout = old_stdout
+            # Cleanup
+            if console_capture:
+                console_capture.close()
             # Mark analysis as complete
             analysis_in_progress[analysis_key] = False
     
@@ -270,11 +382,12 @@ def generate_sse_stream(network, analysis_type, message_queue, params=None):
     analysis_thread.start()
 
     def generate():
+        """Generate SSE messages"""
         # Get expected wallet count from parameters or defaults
         if params:
             num_wallets = params['num_wallets']
         else:
-            num_wallets = analysis_config.default_wallet_count
+            num_wallets = 173
             
         wallet_count = 0
         completion_sent = False
@@ -328,96 +441,112 @@ def generate_sse_stream(network, analysis_type, message_queue, params=None):
     
     return generate()
 
-# SSE endpoints with proper completion handling
+# SSE endpoints with proper error handling
 @api_bp.route('/eth/buy/stream')
 def eth_buy_stream():
     """SSE endpoint for ETH buy analysis with console output"""
-    message_queue = Queue()
-    
-    # Get parameters from request context before passing to generator
     try:
-        num_wallets, days_back, _ = get_analysis_params()
-        params = {'num_wallets': num_wallets, 'days_back': days_back}
-    except:
-        params = None
-    
-    return Response(
-        generate_sse_stream('eth', 'buy', message_queue, params),
-        mimetype="text/event-stream",
-        headers={
-            'Cache-Control': 'no-cache',
-            'X-Accel-Buffering': 'no',
-            'Connection': 'keep-alive'
-        }
-    )
+        message_queue = Queue()
+        
+        # Get parameters from request context before passing to generator
+        try:
+            num_wallets, days_back, _ = get_analysis_params()
+            params = {'num_wallets': num_wallets, 'days_back': days_back}
+        except Exception:
+            params = None
+        
+        return Response(
+            generate_sse_stream('eth', 'buy', message_queue, params),
+            mimetype="text/event-stream",
+            headers={
+                'Cache-Control': 'no-cache',
+                'X-Accel-Buffering': 'no',
+                'Connection': 'keep-alive'
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error in eth_buy_stream: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
 
 @api_bp.route('/eth/sell/stream')
 def eth_sell_stream():
     """SSE endpoint for ETH sell analysis with console output"""
-    message_queue = Queue()
-    
-    # Get parameters from request context before passing to generator
     try:
-        num_wallets, days_back, _ = get_analysis_params()
-        params = {'num_wallets': num_wallets, 'days_back': days_back}
-    except:
-        params = None
-    
-    return Response(
-        generate_sse_stream('eth', 'sell', message_queue, params),
-        mimetype="text/event-stream",
-        headers={
-            'Cache-Control': 'no-cache',
-            'X-Accel-Buffering': 'no',
-            'Connection': 'keep-alive'
-        }
-    )
+        message_queue = Queue()
+        
+        # Get parameters from request context before passing to generator
+        try:
+            num_wallets, days_back, _ = get_analysis_params()
+            params = {'num_wallets': num_wallets, 'days_back': days_back}
+        except Exception:
+            params = None
+        
+        return Response(
+            generate_sse_stream('eth', 'sell', message_queue, params),
+            mimetype="text/event-stream",
+            headers={
+                'Cache-Control': 'no-cache',
+                'X-Accel-Buffering': 'no',
+                'Connection': 'keep-alive'
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error in eth_sell_stream: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
 
 @api_bp.route('/base/buy/stream')
 def base_buy_stream():
     """SSE endpoint for Base buy analysis with console output"""
-    message_queue = Queue()
-    
-    # Get parameters from request context before passing to generator
     try:
-        num_wallets, days_back, _ = get_analysis_params()
-        params = {'num_wallets': num_wallets, 'days_back': days_back}
-    except:
-        params = None
-    
-    return Response(
-        generate_sse_stream('base', 'buy', message_queue, params),
-        mimetype="text/event-stream",
-        headers={
-            'Cache-Control': 'no-cache',
-            'X-Accel-Buffering': 'no',
-            'Connection': 'keep-alive'
-        }
-    )
+        message_queue = Queue()
+        
+        # Get parameters from request context before passing to generator
+        try:
+            num_wallets, days_back, _ = get_analysis_params()
+            params = {'num_wallets': num_wallets, 'days_back': days_back}
+        except Exception:
+            params = None
+        
+        return Response(
+            generate_sse_stream('base', 'buy', message_queue, params),
+            mimetype="text/event-stream",
+            headers={
+                'Cache-Control': 'no-cache',
+                'X-Accel-Buffering': 'no',
+                'Connection': 'keep-alive'
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error in base_buy_stream: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
 
 @api_bp.route('/base/sell/stream')
 def base_sell_stream():
     """SSE endpoint for Base sell analysis with console output"""
-    message_queue = Queue()
-    
-    # Get parameters from request context before passing to generator
     try:
-        num_wallets, days_back, _ = get_analysis_params()
-        params = {'num_wallets': num_wallets, 'days_back': days_back}
-    except:
-        params = None
-    
-    return Response(
-        generate_sse_stream('base', 'sell', message_queue, params),
-        mimetype="text/event-stream",
-        headers={
-            'Cache-Control': 'no-cache',
-            'X-Accel-Buffering': 'no',
-            'Connection': 'keep-alive'
-        }
-    )
-    
-# Keep existing endpoints but enhance with settings
+        message_queue = Queue()
+        
+        # Get parameters from request context before passing to generator
+        try:
+            num_wallets, days_back, _ = get_analysis_params()
+            params = {'num_wallets': num_wallets, 'days_back': days_back}
+        except Exception:
+            params = None
+        
+        return Response(
+            generate_sse_stream('base', 'sell', message_queue, params),
+            mimetype="text/event-stream",
+            headers={
+                'Cache-Control': 'no-cache',
+                'X-Accel-Buffering': 'no',
+                'Connection': 'keep-alive'
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error in base_sell_stream: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+# Regular analysis endpoints with improved error handling
 @api_bp.route('/eth/buy')
 def eth_buy_analysis():
     """ETH mainnet buy analysis"""
@@ -427,8 +556,7 @@ def eth_buy_analysis():
         
         logger.info(f"ETH buy analysis: {num_wallets} wallets, {days_back} days")
         
-        from tracker.buy_tracker import EthComprehensiveTracker
-        analyzer = EthComprehensiveTracker()
+        analyzer = ComprehensiveBuyTracker("ethereum")
         
         if not analyzer.test_connection():
             logger.error("ETH connection test failed")
@@ -436,7 +564,8 @@ def eth_buy_analysis():
         
         results = analyzer.analyze_all_trading_methods(
             num_wallets=num_wallets, 
-            days_back=days_back
+            days_back=days_back,
+            max_wallets_for_sse=True
         )
         
         if not results or not results.get("ranked_tokens"):
@@ -457,13 +586,17 @@ def eth_buy_analysis():
         if results.get('ranked_tokens'):
             filtered_tokens = []
             for token_tuple in results['ranked_tokens']:
-                # ranked_tokens is a list of tuples: (token, data, alpha_score)
-                if isinstance(token_tuple, tuple) and len(token_tuple) >= 3:
-                    token_symbol = token_tuple[0]  # First element is the token symbol
-                    if not should_exclude_token(token_symbol):
+                try:
+                    # ranked_tokens is a list of tuples: (token, data, alpha_score)
+                    if isinstance(token_tuple, tuple) and len(token_tuple) >= 3:
+                        token_symbol = token_tuple[0]  # First element is the token symbol
+                        if not should_exclude_token(token_symbol):
+                            filtered_tokens.append(token_tuple)
+                    else:
+                        # Fallback for unexpected format
                         filtered_tokens.append(token_tuple)
-                else:
-                    # Fallback for unexpected format
+                except Exception as e:
+                    logger.warning(f"Error processing token tuple: {e}")
                     filtered_tokens.append(token_tuple)
             results['ranked_tokens'] = filtered_tokens
         
@@ -485,15 +618,15 @@ def eth_sell_analysis():
     try:
         num_wallets, days_back, _ = get_analysis_params()
         
-        from tracker.sell_tracker import EthComprehensiveSellTracker
-        analyzer = EthComprehensiveSellTracker("ethereum")
+        analyzer = ComprehensiveSellTracker("ethereum")
         
         if not analyzer.test_connection():
             return jsonify({"error": "Connection failed"}), 500
         
         results = analyzer.analyze_all_sell_methods(
             num_wallets=num_wallets, 
-            days_back=days_back
+            days_back=days_back,
+            max_wallets_for_sse=True
         )
         
         if not results or not results.get("ranked_tokens"):
@@ -509,13 +642,17 @@ def eth_sell_analysis():
         if results.get('ranked_tokens'):
             filtered_tokens = []
             for token_tuple in results['ranked_tokens']:
-                # ranked_tokens is a list of tuples: (token, data, alpha_score)
-                if isinstance(token_tuple, tuple) and len(token_tuple) >= 3:
-                    token_symbol = token_tuple[0]  # First element is the token symbol
-                    if not should_exclude_token(token_symbol):
+                try:
+                    # ranked_tokens is a list of tuples: (token, data, alpha_score)
+                    if isinstance(token_tuple, tuple) and len(token_tuple) >= 3:
+                        token_symbol = token_tuple[0]  # First element is the token symbol
+                        if not should_exclude_token(token_symbol):
+                            filtered_tokens.append(token_tuple)
+                    else:
+                        # Fallback for unexpected format
                         filtered_tokens.append(token_tuple)
-                else:
-                    # Fallback for unexpected format
+                except Exception as e:
+                    logger.warning(f"Error processing token tuple: {e}")
                     filtered_tokens.append(token_tuple)
             results['ranked_tokens'] = filtered_tokens
         
@@ -540,14 +677,15 @@ def base_buy_analysis():
         
         logger.info(f"Base buy analysis: {num_wallets} wallets, {days_back} days")
 
-        analyzer = ComprehensiveBuyTracker()
+        analyzer = ComprehensiveBuyTracker("base")
 
         if not analyzer.test_connection():
             return jsonify({"error": "Base connection failed"}), 500
         
         results = analyzer.analyze_all_trading_methods(
             num_wallets=num_wallets, 
-            days_back=days_back
+            days_back=days_back,
+            max_wallets_for_sse=True
         )
         
         if not results or not results.get("ranked_tokens"):
@@ -568,13 +706,17 @@ def base_buy_analysis():
         if results.get('ranked_tokens'):
             filtered_tokens = []
             for token_tuple in results['ranked_tokens']:
-                # ranked_tokens is a list of tuples: (token, data, alpha_score)
-                if isinstance(token_tuple, tuple) and len(token_tuple) >= 3:
-                    token_symbol = token_tuple[0]  # First element is the token symbol
-                    if not should_exclude_token(token_symbol):
+                try:
+                    # ranked_tokens is a list of tuples: (token, data, alpha_score)
+                    if isinstance(token_tuple, tuple) and len(token_tuple) >= 3:
+                        token_symbol = token_tuple[0]  # First element is the token symbol
+                        if not should_exclude_token(token_symbol):
+                            filtered_tokens.append(token_tuple)
+                    else:
+                        # Fallback for unexpected format
                         filtered_tokens.append(token_tuple)
-                else:
-                    # Fallback for unexpected format
+                except Exception as e:
+                    logger.warning(f"Error processing token tuple: {e}")
                     filtered_tokens.append(token_tuple)
             results['ranked_tokens'] = filtered_tokens
         
@@ -603,7 +745,8 @@ def base_sell_analysis():
         
         results = analyzer.analyze_all_sell_methods(
             num_wallets=num_wallets, 
-            days_back=days_back
+            days_back=days_back,
+            max_wallets_for_sse=True
         )
         
         if not results or not results.get("ranked_tokens"):
@@ -619,13 +762,17 @@ def base_sell_analysis():
         if results.get('ranked_tokens'):
             filtered_tokens = []
             for token_tuple in results['ranked_tokens']:
-                # ranked_tokens is a list of tuples: (token, data, alpha_score)
-                if isinstance(token_tuple, tuple) and len(token_tuple) >= 3:
-                    token_symbol = token_tuple[0]  # First element is the token symbol
-                    if not should_exclude_token(token_symbol):
+                try:
+                    # ranked_tokens is a list of tuples: (token, data, alpha_score)
+                    if isinstance(token_tuple, tuple) and len(token_tuple) >= 3:
+                        token_symbol = token_tuple[0]  # First element is the token symbol
+                        if not should_exclude_token(token_symbol):
+                            filtered_tokens.append(token_tuple)
+                    else:
+                        # Fallback for unexpected format
                         filtered_tokens.append(token_tuple)
-                else:
-                    # Fallback for unexpected format
+                except Exception as e:
+                    logger.warning(f"Error processing token tuple: {e}")
                     filtered_tokens.append(token_tuple)
             results['ranked_tokens'] = filtered_tokens
         
@@ -644,33 +791,40 @@ def base_sell_analysis():
 @api_bp.route('/status')
 def api_status():
     """API status and cached data"""
-    cache_status = service.get_cache_status()
-    
-    return jsonify({
-        "status": "online",
-        "environment": settings.environment,
-        "cached_data": cache_status,
-        "last_updated": service.get_last_updated(),
-        "supported_networks": [net.value for net in settings.monitor.supported_networks],
-        "config": {
-            "analysis": {
-                "default_wallet_count": analysis_config.default_wallet_count,
-                "max_wallet_count": analysis_config.max_wallet_count,
-                "max_days_back": analysis_config.max_days_back,
-                "excluded_tokens_count": len(analysis_config.excluded_tokens)
+    try:
+        cache_status = service.get_cache_status()
+        
+        return jsonify({
+            "status": "online",
+            "environment": settings.environment,
+            "cached_data": cache_status,
+            "last_updated": service.get_last_updated(),
+            "supported_networks": [net.value for net in settings.monitor.supported_networks],
+            "config": {
+                "analysis": {
+                    "default_wallet_count": 173,
+                    "max_wallet_count": analysis_config.max_wallet_count,
+                    "max_days_back": analysis_config.max_days_back,
+                    "excluded_tokens_count": len(analysis_config.excluded_tokens)
+                },
+                "monitor": {
+                    "default_interval": monitor_config.default_check_interval_minutes,
+                    "supported_networks": [net.value for net in monitor_config.supported_networks]
+                }
             },
-            "monitor": {
-                "default_interval": monitor_config.default_check_interval_minutes,
-                "supported_networks": [net.value for net in monitor_config.supported_networks]
-            }
-        },
-        "endpoints": [
-            "/api/eth/buy", "/api/eth/sell",
-            "/api/base/buy", "/api/base/sell",
-            "/api/eth/buy/stream", "/api/eth/sell/stream",
-            "/api/base/buy/stream", "/api/base/sell/stream"
-        ]
-    })
+            "endpoints": [
+                "/api/eth/buy", "/api/eth/sell",
+                "/api/base/buy", "/api/base/sell",
+                "/api/eth/buy/stream", "/api/eth/sell/stream",
+                "/api/base/buy/stream", "/api/base/sell/stream"
+            ]
+        })
+    except Exception as e:
+        logger.error(f"Error in api_status: {e}", exc_info=True)
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
     
 @api_bp.route('/monitor/status', methods=['GET'])
 def monitor_status():
@@ -692,7 +846,7 @@ def monitor_status():
                 'config': {
                     'check_interval_minutes': monitor_config.default_check_interval_minutes,
                     'networks': [net.value for net in monitor_config.default_networks],
-                    'num_wallets': analysis_config.default_wallet_count,
+                    'num_wallets': 173,
                     'use_interval_for_timeframe': True
                 },
                 'notification_channels': {
@@ -721,7 +875,6 @@ def monitor_status():
             'recent_alerts': []
         }), 500
 
-# Monitor endpoints with settings integration
 @api_bp.route('/monitor/start', methods=['POST'])
 def start_monitor():
     """Start the automated monitoring"""
@@ -783,7 +936,6 @@ def check_now():
         logger.error(f"Error initiating check: {e}", exc_info=True)
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-# Keep all other monitor endpoints with proper logging...
 @api_bp.route('/monitor/config', methods=['GET', 'POST'])
 def monitor_config_endpoint():
     """Get or update monitor configuration"""
@@ -796,7 +948,7 @@ def monitor_config_endpoint():
                 return jsonify({
                     'check_interval_minutes': monitor_config.default_check_interval_minutes,
                     'networks': [net.value for net in monitor_config.default_networks],
-                    'num_wallets': analysis_config.default_wallet_count,
+                    'num_wallets': 173,
                     'use_interval_for_timeframe': True,
                     'alert_thresholds': monitor_config.alert_thresholds
                 })
@@ -830,7 +982,6 @@ def monitor_config_endpoint():
         logger.error(f"Error with monitor config: {e}", exc_info=True)
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-# Include all other existing monitor endpoints...
 @api_bp.route('/monitor/alerts', methods=['GET'])
 def get_alerts():
     """Get recent alerts"""
@@ -889,29 +1040,35 @@ def update_notifications():
 @api_bp.route('/monitor/test', methods=['GET'])
 def test_monitor():
     """Test endpoint to verify monitor is working"""
-    logger.info("Monitor test endpoint called")
-    
-    test_results = {
-        'monitor_available': monitor is not None,
-        'monitor_module': False,
-        'base_tracker': False,
-        'eth_tracker': False,
-        'settings_loaded': True,
-        'alchemy_config': bool(alchemy_config.api_key)
-    }
-    
     try:
+        logger.info("Monitor test endpoint called")
+        
+        test_results = {
+            'monitor_available': monitor is not None,
+            'monitor_module': False,
+            'base_tracker': False,
+            'eth_tracker': False,
+            'settings_loaded': True,
+            'alchemy_config': bool(alchemy_config.api_key)
+        }
+        
         # Test monitor module
         if monitor:
             test_results['monitor_module'] = hasattr(monitor, 'get_status')
         
-        tracker = ComprehensiveBuyTracker()
-        test_results['base_tracker'] = hasattr(tracker, 'test_connection')
+        # Test base tracker
+        try:
+            tracker = ComprehensiveBuyTracker("base")
+            test_results['base_tracker'] = hasattr(tracker, 'test_connection')
+        except Exception as e:
+            logger.warning(f"Base tracker test failed: {e}")
         
         # Test eth tracker
-        from tracker.buy_tracker import EthComprehensiveTracker
-        tracker = EthComprehensiveTracker()
-        test_results['eth_tracker'] = hasattr(tracker, 'test_connection')
+        try:
+            tracker = ComprehensiveBuyTracker("ethereum")
+            test_results['eth_tracker'] = hasattr(tracker, 'test_connection')
+        except Exception as e:
+            logger.warning(f"ETH tracker test failed: {e}")
         
         return jsonify({
             'status': 'success',
@@ -920,7 +1077,7 @@ def test_monitor():
             'settings_info': {
                 'environment': settings.environment,
                 'supported_networks': [net.value for net in settings.monitor.supported_networks],
-                'default_wallet_count': analysis_config.default_wallet_count,
+                'default_wallet_count': 173,
                 'excluded_tokens_count': len(analysis_config.excluded_tokens)
             }
         })
@@ -930,7 +1087,7 @@ def test_monitor():
         return jsonify({
             'status': 'error',
             'message': f'Monitor test failed: {str(e)}',
-            'results': test_results
+            'results': test_results if 'test_results' in locals() else {}
         }), 500
 
 @api_bp.route('/config', methods=['GET'])
@@ -942,7 +1099,7 @@ def get_api_config():
             'config': {
                 'environment': settings.environment,
                 'analysis': {
-                    'default_wallet_count': analysis_config.default_wallet_count,
+                    'default_wallet_count': 173,
                     'max_wallet_count': analysis_config.max_wallet_count,
                     'default_days_back_eth': analysis_config.default_days_back_eth,
                     'default_days_back_base': analysis_config.default_days_back_base,
@@ -990,22 +1147,34 @@ def manage_excluded_tokens():
         
         elif request.method == 'POST':
             data = request.json
+            if not data:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'No JSON data provided'
+                }), 400
+                
             action = data.get('action')  # 'add', 'remove', 'replace'
             tokens = data.get('tokens', [])
             
+            if not action:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Action is required'
+                }), 400
+            
             if action == 'add':
                 for token in tokens:
-                    if token.upper() not in [t.upper() for t in analysis_config.excluded_tokens]:
+                    if token and token.upper() not in [t.upper() for t in analysis_config.excluded_tokens]:
                         analysis_config.excluded_tokens.append(token.upper())
                         
             elif action == 'remove':
                 analysis_config.excluded_tokens = [
                     t for t in analysis_config.excluded_tokens 
-                    if t.upper() not in [token.upper() for token in tokens]
+                    if t.upper() not in [token.upper() for token in tokens if token]
                 ]
                 
             elif action == 'replace':
-                analysis_config.excluded_tokens = [token.upper() for token in tokens]
+                analysis_config.excluded_tokens = [token.upper() for token in tokens if token]
                 
             else:
                 return jsonify({
@@ -1068,7 +1237,6 @@ def token_details(contract_address):
     """Get detailed token information using shared utilities"""
     try:
         from datetime import datetime
-        import os
         
         network = request.args.get('network', 'ethereum')
         
@@ -1207,7 +1375,6 @@ def token_details(contract_address):
             'traceback': traceback.format_exc() if settings.flask.debug else None
         }), 500
 
-# Health check endpoint
 @api_bp.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint for load balancers"""
@@ -1239,3 +1406,200 @@ def health_check():
             'error': str(e),
             'timestamp': datetime.now().isoformat()
         }), 500
+
+@api_bp.route('/test/sse')
+def test_sse():
+    """Simple SSE test that should always work"""
+    def test_generator():
+        import time
+        
+        messages = [
+            {'type': 'console', 'message': '🚀 SSE Test started', 'level': 'info'},
+            {'type': 'console', 'message': '📊 Message 1/5', 'level': 'info'},
+            {'type': 'progress', 'percentage': 20},
+            {'type': 'console', 'message': '📊 Message 2/5', 'level': 'success'},
+            {'type': 'progress', 'percentage': 40},
+            {'type': 'console', 'message': '📊 Message 3/5', 'level': 'warning'},
+            {'type': 'progress', 'percentage': 60},
+            {'type': 'console', 'message': '📊 Message 4/5', 'level': 'error'},
+            {'type': 'progress', 'percentage': 80},
+            {'type': 'console', 'message': '✅ Message 5/5 - Test complete!', 'level': 'highlight'},
+            {'type': 'progress', 'percentage': 100},
+            {'type': 'complete', 'status': 'success'},
+            {'type': 'final_complete'}
+        ]
+        
+        for i, message in enumerate(messages):
+            try:
+                yield f"data: {json.dumps(message)}\n\n"
+                time.sleep(0.5)  # 500ms delay
+            except Exception as e:
+                logger.error(f"Error in test_sse generator: {e}")
+                break
+    
+    return Response(
+        test_generator(),
+        mimetype="text/event-stream",
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+            'Connection': 'keep-alive'
+        }
+    )
+
+@api_bp.route('/debug/analysis/<network>/<analysis_type>')
+def debug_analysis(network, analysis_type):
+    """Debug endpoint to see exactly where analysis hangs"""
+    try:
+        debug_info = []
+        
+        debug_info.append("🔍 Debug Analysis Started")
+        debug_info.append(f"Network: {network}, Type: {analysis_type}")
+        
+        # Step 1: Create analyzer
+        debug_info.append("📋 Step 1: Creating analyzer...")
+        
+        if network == 'base' and analysis_type == 'buy':
+            analyzer = ComprehensiveBuyTracker("base")
+        elif network == 'base' and analysis_type == 'sell':
+            analyzer = ComprehensiveSellTracker("base")
+        elif network == 'eth' and analysis_type == 'buy':
+            analyzer = ComprehensiveBuyTracker("ethereum")
+        elif network == 'eth' and analysis_type == 'sell':
+            analyzer = ComprehensiveSellTracker("ethereum")
+        else:
+            return jsonify({"error": "Invalid network/type combination"})
+        
+        debug_info.append("✅ Analyzer created successfully")
+        
+        # Step 2: Test connection
+        debug_info.append("📋 Step 2: Testing connection...")
+        if analyzer.test_connection():
+            debug_info.append("✅ Connection test passed")
+        else:
+            debug_info.append("❌ Connection test failed")
+            return jsonify({"debug_info": debug_info})
+        
+        # Step 3: Get wallets
+        debug_info.append("📋 Step 3: Getting top 5 wallets...")
+        try:
+            top_wallets = analyzer.get_top_wallets(5)
+            debug_info.append(f"✅ Retrieved {len(top_wallets)} wallets")
+            
+            if top_wallets:
+                debug_info.append(f"First wallet: {top_wallets[0].get('address', 'No address')[:10]}...")
+            
+        except Exception as e:
+            debug_info.append(f"❌ Wallet retrieval failed: {e}")
+            return jsonify({"debug_info": debug_info})
+        
+        # Step 4: Test single wallet analysis
+        if top_wallets:
+            debug_info.append("📋 Step 4: Testing single wallet analysis...")
+            try:
+                wallet_address = top_wallets[0]['address']
+                debug_info.append(f"Testing wallet: {wallet_address[:10]}...")
+                
+                # Test with very short timeframe
+                if analysis_type == 'buy':
+                    purchases = analyzer.analyze_wallet_purchases(wallet_address, 0.1)  # 2.4 hours
+                    debug_info.append(f"✅ Found {len(purchases)} purchases")
+                else:
+                    sells = analyzer.analyze_wallet_sells(wallet_address, 0.1)  # 2.4 hours
+                    debug_info.append(f"✅ Found {len(sells)} sells")
+                
+            except Exception as e:
+                debug_info.append(f"❌ Single wallet analysis failed: {e}")
+                import traceback
+                debug_info.append(f"Traceback: {traceback.format_exc()}")
+        
+        debug_info.append("🎉 Debug analysis completed successfully!")
+        
+        return jsonify({
+            "status": "success",
+            "debug_info": debug_info,
+            "total_wallets": len(top_wallets) if 'top_wallets' in locals() else 0
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error", 
+            "error": str(e),
+            "debug_info": debug_info if 'debug_info' in locals() else []
+        })
+
+@api_bp.route('/debug/console')
+def debug_console():
+    """Test console output capture"""
+    from queue import Queue
+    import json
+    
+    def test_generator():
+        # Test various types of output
+        yield f"data: {json.dumps({'type': 'console', 'message': '🚀 Testing console capture...', 'level': 'info'})}\n\n"
+        
+        # Test print statements
+        try:
+            print("📊 This is a print statement test")
+            logger.info("📋 This is a logger info test")
+            logger.warning("⚠️ This is a logger warning test")
+            logger.error("❌ This is a logger error test")
+            
+            # Test with emojis and special characters
+            print("✅ Print with success emoji")
+            print("🔍 Analysis progress: 50%")
+            print("💰 ETH spent: 1.2345")
+        except Exception as e:
+            logger.error(f"Error in console test: {e}")
+        
+        yield f"data: {json.dumps({'type': 'console', 'message': '🎉 Console test complete!', 'level': 'success'})}\n\n"
+        yield f"data: {json.dumps({'type': 'complete', 'status': 'success'})}\n\n"
+    
+    return Response(
+        test_generator(),
+        mimetype="text/event-stream",
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+            'Connection': 'keep-alive'
+        }
+    )
+
+# Error handlers
+@api_bp.errorhandler(404)
+def not_found(error):
+    """Handle 404 errors"""
+    return jsonify({
+        'status': 'error',
+        'message': 'Endpoint not found',
+        'error': '404 Not Found'
+    }), 404
+
+@api_bp.errorhandler(405)
+def method_not_allowed(error):
+    """Handle 405 errors"""
+    return jsonify({
+        'status': 'error',
+        'message': 'Method not allowed',
+        'error': '405 Method Not Allowed'
+    }), 405
+
+@api_bp.errorhandler(500)
+def internal_error(error):
+    """Handle 500 errors"""
+    logger.error(f"Internal server error: {error}", exc_info=True)
+    return jsonify({
+        'status': 'error',
+        'message': 'Internal server error',
+        'error': '500 Internal Server Error'
+    }), 500
+
+@api_bp.errorhandler(Exception)
+def handle_exception(error):
+    """Handle all other exceptions"""
+    logger.error(f"Unhandled exception: {error}", exc_info=True)
+    return jsonify({
+        'status': 'error',
+        'message': 'An unexpected error occurred',
+        'error': str(error)
+    }), 500

@@ -202,6 +202,17 @@ class BaseTracker(ABC):
         
         logger.info(f"Initialized {network} tracker with min ETH: {self.min_eth_value}")
     
+    def safe_float_conversion(self, value, default=0.0):
+        """Safely convert value to float, handling None and invalid values"""
+        if value is None:
+            return default
+        
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            logger.warning(f"Could not convert value to float: {value} (type: {type(value)})")
+            return default
+
     def make_alchemy_request(self, method: str, params: List) -> Dict:
         """Make request to Alchemy API"""
         payload = {
@@ -227,7 +238,9 @@ class BaseTracker(ABC):
         """Get block range for recent days"""
         try:
             current_block_result = self.make_alchemy_request("eth_blockNumber", [])
+            
             if not current_block_result.get("result"):
+                logger.warning(f"Could not get current block for {self.network}")
                 return "0x0", "0x0"
                 
             current_block = int(current_block_result["result"], 16)
@@ -247,7 +260,7 @@ class BaseTracker(ABC):
         except Exception as e:
             logger.error(f"Error calculating {self.network} block range: {e}")
             return "0x0", "0x0"
-    
+        
     def is_significant_purchase(self, transfer: Dict) -> bool:
         """Check if purchase meets minimum value threshold"""
         asset = transfer.get("asset", "")
@@ -283,12 +296,12 @@ class BaseTracker(ABC):
         """Get contract info - uses centralized logic"""
         return ContractUtils.get_contract_info(address)
     
-    def get_top_wallets(self, num_wallets: int = 50) -> List[Dict]:
+    def get_top_wallets(self, num_wallets: int = 173) -> List[Dict]:
         """Get top wallets from database"""   
         smart_wallets_count = self.wallets_collection.count_documents({})
         print(f"Total smart wallets: {smart_wallets_count}") 
         print(f"Wallet collection: {self.db[settings.database.wallets_collection]}")     
-        return list(self.wallets_collection.find().sort("score", 1).limit(num_wallets))
+        return list(self.wallets_collection.find().sort('score', 1).limit(num_wallets).max_time_ms(30000))
     
     def test_connection(self) -> bool:
         """Test connection to network"""
