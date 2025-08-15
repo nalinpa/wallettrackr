@@ -8,6 +8,7 @@ import math
 import logging
 from typing import List, Dict, Optional, Tuple
 from abc import ABC, abstractmethod
+import httpx
 
 # Import settings
 from config.settings import settings, alchemy_config, analysis_config
@@ -200,13 +201,40 @@ class EnhancedBaseTracker(ABC):
     def __init__(self, network: str):
         self.network = network
         self.network_config = NetworkConfig.get_config(network)
-        self.alchemy_url = self.network_config['alchemy_url']
-        self.min_eth_value = self.network_config['min_eth_value']
+        if not alchemy_config.api_key:
+            raise ValueError(f"Alchemy API key not configured! Set ALCHEMY_API_KEY environment variable.")
         
+        base_alchemy_url = self.network_config['alchemy_url']
+        if alchemy_config.api_key not in base_alchemy_url:
+            self.alchemy_url = base_alchemy_url + alchemy_config.api_key
+        else:
+            self.alchemy_url = base_alchemy_url
+
+        self.min_eth_value = self.network_config['min_eth_value']
+
         # Database connection
         self.mongo_client = pymongo.MongoClient(settings.database.mongo_uri)
         self.db = self.mongo_client[settings.database.db_name]
         self.wallets_collection = self.db[settings.database.wallets_collection]
+        
+        self.http_client = httpx.Client(
+            timeout=httpx.Timeout(
+                timeout=30.0,      # Total timeout
+                connect=10.0,      # Connection timeout
+                read=25.0,         # Read timeout
+                write=10.0         # Write timeout
+            ),
+            limits=httpx.Limits(
+                max_connections=20,        # Total connection pool size
+                max_keepalive_connections=10  # Keep-alive connections
+            ),
+            headers={
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'User-Agent': f'CryptoAlpha-{network}-Tracker/1.0'
+            },
+            http2=True
+        )
         
         # Web3 integration (if available)
         self.web3_enabled = WEB3_AVAILABLE
@@ -236,7 +264,7 @@ class EnhancedBaseTracker(ABC):
             return default
 
     def make_alchemy_request(self, method: str, params: List) -> Dict:
-        """Make request to Alchemy API"""
+        """Enhanced Alchemy API calls with httpx connection pooling"""
         payload = {
             "id": 1,
             "jsonrpc": "2.0",
@@ -245,16 +273,58 @@ class EnhancedBaseTracker(ABC):
         }
         
         try:
-            response = requests.post(
-                self.alchemy_url, 
-                json=payload, 
-                timeout=alchemy_config.timeout_seconds
+            # Use httpx instead of requests
+            response = self.http_client.post(
+                self.alchemy_url,
+                json=payload
             )
+            
+            # Check for HTTP errors
             response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logger.error(f"Alchemy API error for {self.network}: {e}")
+            
+            # Parse and return JSON
+            result = response.json()
+            
+            # Log successful requests (optional, for debugging)
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"✅ {method} request successful for {self.network}")
+            
+            return result
+            
+        except httpx.TimeoutException as e:
+            logger.error(f"⏰ Timeout for {method} on {self.network}: {e}")
             return {}
+        except httpx.HTTPStatusError as e:
+            logger.error(f"🔴 HTTP {e.response.status_code} error for {method} on {self.network}")
+            if e.response.status_code == 429:  # Rate limit
+                logger.warning("Rate limit hit, consider adding delay")
+            return {}
+        except httpx.RequestError as e:
+            logger.error(f"🌐 Network error for {method} on {self.network}: {e}")
+            return {}
+        except Exception as e:
+            logger.error(f"❌ Unexpected error for {method} on {self.network}: {e}")
+            return {}
+        
+    def close_connections(self):
+        """Close httpx client and database connections"""
+        try:
+            if hasattr(self, 'http_client'):
+                self.http_client.close()
+                logger.debug(f"Closed httpx client for {self.network}")
+        except Exception as e:
+            logger.warning(f"Error closing httpx client: {e}")
+        
+        try:
+            if hasattr(self, 'mongo_client'):
+                self.mongo_client.close()
+                logger.debug(f"Closed MongoDB client for {self.network}")
+        except Exception as e:
+            logger.warning(f"Error closing MongoDB client: {e}")
+
+    def __del__(self):
+        """Cleanup when tracker is destroyed"""
+        self.close_connections()
     
     def get_recent_block_range(self, days_back: float = 1) -> Tuple[str, str]:
         """Get block range for recent days - Enhanced with Web3 option"""
@@ -376,8 +446,8 @@ class EnhancedBaseTracker(ABC):
         return wallets
     
     def test_connection(self) -> bool:
-        """Test connection to network - Enhanced with Web3"""
-        logger.info(f"Testing {self.network} connection...")
+        """Enhanced connection test with httpx performance info"""
+        logger.info(f"Testing {self.network} connection with httpx...")
         
         # Test Web3 connection first if available
         if self.web3_enabled and hasattr(self, 'web3_tracker'):
@@ -386,20 +456,29 @@ class EnhancedBaseTracker(ABC):
                     logger.info(f"✅ Web3 connection successful for {self.network}")
                     return True
                 else:
-                    logger.warning(f"⚠️  Web3 connection failed, falling back to Alchemy API")
+                    logger.warning(f"⚠️  Web3 connection failed, testing Alchemy API with httpx")
             except Exception as e:
-                logger.warning(f"⚠️  Web3 test failed: {e}, falling back to Alchemy API")
+                logger.warning(f"⚠️  Web3 test failed: {e}, testing Alchemy API with httpx")
         
-        # Fallback to Alchemy API test
+        # Test Alchemy API with httpx
         try:
+            start_time = time.time()
             result = self.make_alchemy_request("eth_blockNumber", [])
+            end_time = time.time()
+            
             if result.get("result"):
                 current_block = int(result["result"], 16)
-                logger.info(f"✅ Connected to {self.network} via Alchemy API - Current block: {current_block}")
+                response_time = (end_time - start_time) * 1000  # Convert to ms
+                
+                logger.info(f"✅ Connected to {self.network} via httpx")
+                logger.info(f"📊 Current block: {current_block}")
+                logger.info(f"⚡ Response time: {response_time:.0f}ms")
+                
                 return True
             else:
-                logger.error(f"❌ Failed to connect to {self.network}")
+                logger.error(f"❌ Failed to connect to {self.network} - no result")
                 return False
+                
         except Exception as e:
             logger.error(f"❌ {self.network} connection error: {e}")
             return False

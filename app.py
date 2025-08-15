@@ -1,3 +1,4 @@
+import atexit
 from datetime import datetime, timedelta
 from functools import wraps
 from flask import Flask, jsonify, render_template_string, request, send_from_directory, session, redirect, url_for, render_template, flash
@@ -37,6 +38,20 @@ def create_app():
     register_error_handlers(app)
     register_template_filters(app)
     register_context_processors(app)
+    
+    def cleanup_connections():
+        """Cleanup all httpx connections on shutdown"""
+        try:
+            # Import here to avoid circular imports
+            from tracker.buy_tracker import ComprehensiveBuyTracker
+            from tracker.sell_tracker import ComprehensiveSellTracker
+            
+            # You could maintain a global registry, but for now just log
+            print("🔧 Application shutdown - httpx connections will auto-cleanup")
+        except Exception as e:
+            print(f"Error during connection cleanup: {e}")
+    
+    atexit.register(cleanup_connections)
     
     return app
 
