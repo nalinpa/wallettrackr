@@ -1,4 +1,4 @@
-from .tracker_utils import BaseTracker, NetworkSpecificMixins
+from .tracker_utils import EnhancedBaseTracker, NetworkSpecificMixins
 from typing import List, Dict
 import math
 import time
@@ -6,25 +6,15 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-class ComprehensiveBuyTracker(BaseTracker, NetworkSpecificMixins.BaseMixin):
-    """Universal buy tracker with enhanced logging and progress tracking"""
+class Web3EnhancedBuyTracker(EnhancedBaseTracker, NetworkSpecificMixins.BaseMixin):
+    """Enhanced buy tracker with Web3 analysis capabilities"""
     
     def __init__(self, network="base"):
         super().__init__(network)
-    
-    def safe_float_conversion(self, value, default=0.0):
-        """Safely convert value to float, handling None and invalid values"""
-        if value is None:
-            return default
-        
-        try:
-            return float(value)
-        except (ValueError, TypeError):
-            logger.warning(f"Could not convert value to float: {value} (type: {type(value)})")
-            return default
+        self.purchase_cache = {}  # Cache for Web3-enhanced purchases
     
     def analyze_wallet_purchases(self, wallet_address: str, days_back: int = 1) -> List[Dict]:
-        """Analyze token purchases with proper error handling and detailed logging"""
+        """Analyze token purchases with Web3 enhancement"""
         logger.info(f"Analyzing {self.network} purchases for: {wallet_address}")
 
         start_block, end_block = self.get_recent_block_range(days_back)
@@ -91,7 +81,7 @@ class ComprehensiveBuyTracker(BaseTracker, NetworkSpecificMixins.BaseMixin):
         matched_transactions = len([tx for tx in tx_groups.values() if tx["incoming"]])
         print(f"✅ Matched {matched_transactions} complete purchase transactions")
         
-        # Extract purchases
+        # Extract purchases with Web3 enhancement
         purchases = []
         platform_counts = {}
         
@@ -138,6 +128,7 @@ class ComprehensiveBuyTracker(BaseTracker, NetworkSpecificMixins.BaseMixin):
                         platform = contract_info["platform"]
                         platform_counts[platform] = platform_counts.get(platform, 0) + 1
                         
+                        # Create basic purchase
                         purchase = {
                             "transaction_hash": tx_hash,
                             "platform": platform,
@@ -151,28 +142,65 @@ class ComprehensiveBuyTracker(BaseTracker, NetworkSpecificMixins.BaseMixin):
                             "block_number": block_number,
                             "contract_address": contract_address,
                             "is_base_native": is_base_native,
-                            "estimated_usd_value": self.estimate_usd_value(amount_received, token_received) if token_received else 0
+                            "estimated_usd_value": self.estimate_usd_value(amount_received, token_received) if token_received else 0,
+                            "wallet_address": wallet_address
                         }
                         
-                        purchases.append(purchase)
-                        
-                        # Detailed logging like sell tracker
-                        platform_emoji = {
-                            "Uniswap": "🦄", "PancakeSwap": "🥞", "SushiSwap": "🍣",
-                            "1inch": "🔄", "0x": "⚡", "Telegram Bot": "🤖",
-                            "Unknown": "❓"
-                        }
-                        native_flag = "🔵" if is_base_native else ""
-                        
-                        logger.debug(f"{platform_emoji.get(platform, '🔄')} {native_flag}BOUGHT: {token_received} ({amount_received:.0f}) via {platform} | ~${self.estimate_usd_value(amount_received, token_received):.0f}")
+                        # 🚀 NEW: Enhance with Web3 data
+                        if self.web3_enabled:
+                            enhanced_purchase = self.enhance_purchase_with_web3(purchase, tx_hash)
+                            purchases.append(enhanced_purchase)
+                            
+                            # Enhanced logging with Web3 data
+                            web3_data = enhanced_purchase.get('web3_analysis', {})
+                            sophistication = enhanced_purchase.get('sophistication_score', 0)
+                            method_used = web3_data.get('method_used', 'unknown')
+                            
+                            platform_emoji = {
+                                "Uniswap": "🦄", "PancakeSwap": "🥞", "SushiSwap": "🍣",
+                                "1inch": "🔄", "0x": "⚡", "Telegram Bot": "🤖",
+                                "Aerodrome": "🚀", "BaseSwap": "🔵", "Unknown": "❓"
+                            }
+                            native_flag = "🔵" if is_base_native else ""
+                            sophistication_flag = "🧠" if sophistication > 70 else "🔰" if sophistication > 40 else ""
+                            
+                            logger.debug(f"{platform_emoji.get(platform, '🔄')} {native_flag}{sophistication_flag}BOUGHT: {token_received} ({amount_received:.0f}) via {platform} [{method_used}] | ~${self.estimate_usd_value(amount_received, token_received):.0f} | Sophistication: {sophistication:.0f}")
+                        else:
+                            purchases.append(purchase)
+                            
+                            # Original logging
+                            platform_emoji = {
+                                "Uniswap": "🦄", "PancakeSwap": "🥞", "SushiSwap": "🍣",
+                                "1inch": "🔄", "0x": "⚡", "Telegram Bot": "🤖",
+                                "Unknown": "❓"
+                            }
+                            native_flag = "🔵" if is_base_native else ""
+                            
+                            logger.debug(f"{platform_emoji.get(platform, '🔄')} {native_flag}BOUGHT: {token_received} ({amount_received:.0f}) via {platform} | ~${self.estimate_usd_value(amount_received, token_received):.0f}")
         
-        # Summary logging
+        # Enhanced summary logging
         if purchases:
             total_eth = sum(p.get("eth_spent", 0) for p in purchases)
             total_usd = sum(p.get("estimated_usd_value", 0) for p in purchases)
             unique_tokens = len(set(p.get("token_bought") for p in purchases))
             
-            print(f"💰 Found {len(purchases)} purchases: {unique_tokens} tokens, {total_eth:.4f} ETH (~${total_usd:.0f})")
+            # Web3 enhanced stats
+            if self.web3_enabled and purchases:
+                avg_sophistication = sum(p.get('sophistication_score', 0) for p in purchases) / len(purchases)
+                high_sophistication_count = len([p for p in purchases if p.get('sophistication_score', 0) > 70])
+                sophisticated_methods = set()
+                for p in purchases:
+                    web3_data = p.get('web3_analysis', {})
+                    method = web3_data.get('method_used', 'unknown')
+                    if method != 'unknown':
+                        sophisticated_methods.add(method)
+                
+                print(f"💰 Found {len(purchases)} purchases: {unique_tokens} tokens, {total_eth:.4f} ETH (~${total_usd:.0f})")
+                print(f"🧠 Avg Sophistication: {avg_sophistication:.1f} | High Sophistication: {high_sophistication_count}")
+                if sophisticated_methods:
+                    print(f"⚙️  Methods Used: {', '.join(list(sophisticated_methods)[:3])}")
+            else:
+                print(f"💰 Found {len(purchases)} purchases: {unique_tokens} tokens, {total_eth:.4f} ETH (~${total_usd:.0f})")
             
             if platform_counts:
                 platform_summary = ", ".join([f"{platform}({count})" for platform, count in platform_counts.items()])
@@ -221,7 +249,7 @@ class ComprehensiveBuyTracker(BaseTracker, NetworkSpecificMixins.BaseMixin):
         return any(trading_indicators)
     
     def calculate_token_alpha_score(self, token_data: Dict) -> float:
-        """Calculate alpha score with null safety"""
+        """Enhanced alpha score calculation with Web3 data"""
         wallet_scores = token_data.get("wallet_scores", [])
         purchases = token_data.get("purchases", [])
         total_eth_spent = self.safe_float_conversion(token_data.get("total_eth_spent"))
@@ -232,11 +260,26 @@ class ComprehensiveBuyTracker(BaseTracker, NetworkSpecificMixins.BaseMixin):
         max_possible_wallet_score = 300
         weighted_eth_score = 0.0
         base_native_bonus = 1.0
+        sophistication_bonus = 1.0
+        
+        # 🚀 NEW: Include Web3 sophistication data
+        sophistication_scores = []
+        method_diversity = set()
         
         for purchase in purchases:
             wallet_score = self.safe_float_conversion(purchase.get("wallet_score"), max_possible_wallet_score)
             eth_spent = self.safe_float_conversion(purchase.get("eth_spent"))
             is_base_native = purchase.get("is_base_native", False)
+            
+            # Web3 enhancements
+            sophistication = purchase.get("sophistication_score", 0)
+            if sophistication > 0:
+                sophistication_scores.append(sophistication)
+            
+            web3_data = purchase.get("web3_analysis", {})
+            method_used = web3_data.get("method_used", "unknown")
+            if method_used != "unknown":
+                method_diversity.add(method_used)
             
             if is_base_native:
                 base_native_bonus = 1.3
@@ -244,7 +287,23 @@ class ComprehensiveBuyTracker(BaseTracker, NetworkSpecificMixins.BaseMixin):
             if eth_spent > 0:
                 wallet_quality_multiplier = (max_possible_wallet_score - wallet_score + 100) / 100
                 eth_component = math.log(1 + eth_spent) * 10
-                weighted_eth_score += eth_component * wallet_quality_multiplier * base_native_bonus
+                
+                # 🚀 NEW: Sophistication multiplier
+                if sophistication > 0:
+                    sophistication_multiplier = 1.0 + (sophistication / 200)  # Up to 1.5x for 100 sophistication
+                else:
+                    sophistication_multiplier = 1.0
+                
+                weighted_eth_score += eth_component * wallet_quality_multiplier * base_native_bonus * sophistication_multiplier
+        
+        # 🚀 NEW: Calculate sophistication bonus
+        if sophistication_scores:
+            avg_sophistication = sum(sophistication_scores) / len(sophistication_scores)
+            sophistication_bonus = 1.0 + (avg_sophistication / 500)  # Up to 1.2x for high sophistication
+            
+            # Method diversity bonus
+            if len(method_diversity) > 1:
+                sophistication_bonus *= 1.1  # 10% bonus for method diversity
         
         valid_scores = [self.safe_float_conversion(score) for score in wallet_scores if score is not None]
         if not valid_scores:
@@ -253,16 +312,16 @@ class ComprehensiveBuyTracker(BaseTracker, NetworkSpecificMixins.BaseMixin):
         score_components = self.calculate_score_components(valid_scores, max_possible_wallet_score)
         weighted_consensus_score = score_components["weighted_consensus"]
         
-        base_network_bonus = 1.1
+        base_network_bonus = 1.1 if self.network == "base" else 1.0
         
         if weighted_consensus_score > 0:
-            final_score = (weighted_eth_score * weighted_consensus_score * base_network_bonus) / 10
+            final_score = (weighted_eth_score * weighted_consensus_score * base_network_bonus * sophistication_bonus) / 10
             return round(final_score, 2)
         
         return 0.0
     
     def get_ranked_tokens(self, token_summary: Dict) -> List[tuple]:
-        """Get tokens ranked by alpha score"""
+        """Get tokens ranked by enhanced alpha score"""
         scored_tokens = []
         
         for token, data in token_summary.items():
@@ -275,7 +334,7 @@ class ComprehensiveBuyTracker(BaseTracker, NetworkSpecificMixins.BaseMixin):
         return sorted(scored_tokens, key=lambda x: x[2], reverse=True)
     
     def analyze_all_trading_methods(self, num_wallets: int = 173, max_wallets_for_sse: bool = False, days_back: int = 1) -> Dict:
-        """Main entry point with enhanced logging like sell tracker"""
+        """Main entry point with Web3 enhancements"""
         logger.info(f"Starting comprehensive {self.network} buy analysis: {num_wallets} wallets, {days_back} days")
         
         # Limit wallets for SSE to prevent hanging
@@ -286,6 +345,8 @@ class ComprehensiveBuyTracker(BaseTracker, NetworkSpecificMixins.BaseMixin):
         print(f"🚀 Starting {self.network.title()} Buy Analysis")
         print(f"📊 Target: {num_wallets} wallets, {days_back} days back")
         print(f"🌐 Network: {self.network.title()}")
+        if self.web3_enabled:
+            print(f"⚡ Web3 Enhanced Analysis Enabled")
         print("="*60)
         
         top_wallets = self.get_top_wallets(num_wallets)
@@ -297,10 +358,26 @@ class ComprehensiveBuyTracker(BaseTracker, NetworkSpecificMixins.BaseMixin):
         
         print(f"✅ Retrieved {len(top_wallets)} top {self.network} wallets")
         
+        # Enhanced with Web3 wallet analysis
+        if self.web3_enabled and len(top_wallets) > 0:
+            enhanced_wallets = [w for w in top_wallets if w.get('web3_analysis')]
+            if enhanced_wallets:
+                avg_sophistication = sum(w['web3_analysis'].get('sophistication_score', 0) for w in enhanced_wallets) / len(enhanced_wallets)
+                print(f"🧠 Average wallet sophistication: {avg_sophistication:.1f}")
+        
         all_purchases = []
         token_summary = {}
         platform_summary = {}
         base_native_summary = {"native": 0, "bridged": 0}
+        
+        # Web3 enhanced tracking
+        web3_analysis_summary = {
+            "total_transactions_analyzed": 0,
+            "sophisticated_transactions": 0,
+            "method_distribution": {},
+            "avg_sophistication": 0,
+            "gas_efficiency_avg": 0
+        }
         
         # Progress tracking
         total_purchases = 0
@@ -315,12 +392,17 @@ class ComprehensiveBuyTracker(BaseTracker, NetworkSpecificMixins.BaseMixin):
                 logger.warning(f"Wallet {i} has no address, skipping")
                 continue
             
-            # Progress logging every 5 wallets or first 3
+            # Progress logging with Web3 awareness
             if i % 5 == 1 or i <= 3:
-                print(f"🔄 Processing wallet {i}/{len(top_wallets)}: {wallet_address[:10]}...")
+                sophistication_info = ""
+                if self.web3_enabled and wallet.get('web3_analysis'):
+                    wallet_sophistication = wallet['web3_analysis'].get('sophistication_score', 0)
+                    sophistication_info = f" (Sophistication: {wallet_sophistication:.0f})"
+                
+                print(f"🔄 Processing wallet {i}/{len(top_wallets)}: {wallet_address[:10]}...{sophistication_info}")
                 logger.info(f"Progress: {i}/{len(top_wallets)} wallets processed")
             
-            # Progress updates every wallet (matches sell tracker)
+            # Progress updates every wallet
             print(f"🔄 [{i}/{len(top_wallets)}] Processing wallet {wallet_address[:8]}... (Score: {wallet_score})")
             
             # Send progress via logger (which gets captured by SSE)
@@ -344,13 +426,40 @@ class ComprehensiveBuyTracker(BaseTracker, NetworkSpecificMixins.BaseMixin):
                 total_purchases += wallet_purchases
                 total_eth_spent += wallet_eth
                 
+                # 🚀 NEW: Update Web3 analysis summary
+                if self.web3_enabled:
+                    for purchase in purchases:
+                        web3_data = purchase.get('web3_analysis', {})
+                        if web3_data:
+                            web3_analysis_summary["total_transactions_analyzed"] += 1
+                            
+                            sophistication = purchase.get('sophistication_score', 0)
+                            if sophistication > 70:
+                                web3_analysis_summary["sophisticated_transactions"] += 1
+                            
+                            method = web3_data.get('method_used', 'unknown')
+                            if method != 'unknown':
+                                web3_analysis_summary["method_distribution"][method] = web3_analysis_summary["method_distribution"].get(method, 0) + 1
+                            
+                            gas_efficiency = web3_data.get('gas_efficiency', 0)
+                            if gas_efficiency > 0:
+                                current_avg = web3_analysis_summary["gas_efficiency_avg"]
+                                count = web3_analysis_summary["total_transactions_analyzed"]
+                                web3_analysis_summary["gas_efficiency_avg"] = ((current_avg * (count - 1)) + gas_efficiency) / count
+                
                 # Aggregate data
                 self._aggregate_token_data(purchases, token_summary, platform_summary, base_native_summary, wallet_address)
                 
-                # Progress summary every 10 wallets
+                # Enhanced progress summary every 10 wallets
                 if i % 10 == 0:
                     avg_purchases = total_purchases / processed_wallets if processed_wallets > 0 else 0
-                    print(f"📈 Progress Update: {processed_wallets} wallets, {total_purchases} purchases, {total_eth_spent:.2f} ETH (avg: {avg_purchases:.1f} purchases/wallet)")
+                    progress_msg = f"📈 Progress Update: {processed_wallets} wallets, {total_purchases} purchases, {total_eth_spent:.2f} ETH (avg: {avg_purchases:.1f} purchases/wallet)"
+                    
+                    if self.web3_enabled and web3_analysis_summary["total_transactions_analyzed"] > 0:
+                        sophisticated_pct = (web3_analysis_summary["sophisticated_transactions"] / web3_analysis_summary["total_transactions_analyzed"]) * 100
+                        progress_msg += f" | 🧠 {sophisticated_pct:.1f}% sophisticated"
+                    
+                    print(progress_msg)
                 
                 time.sleep(0.5)  # Rate limiting
                 
@@ -365,10 +474,10 @@ class ComprehensiveBuyTracker(BaseTracker, NetworkSpecificMixins.BaseMixin):
                 print(f"❌ Error analyzing wallet {wallet_address[:10]}: {str(e)[:50]}...")
                 continue
         
-        return self._generate_comprehensive_analysis(all_purchases, token_summary, platform_summary, base_native_summary)
+        return self._generate_comprehensive_analysis(all_purchases, token_summary, platform_summary, base_native_summary, web3_analysis_summary)
     
     def _aggregate_token_data(self, purchases, token_summary, platform_summary, base_native_summary, wallet_address):
-        """Aggregate purchase data with enhanced tracking"""
+        """Enhanced aggregation with Web3 data"""
         for purchase in purchases:
             token = purchase.get("token_bought")
             platform = purchase.get("platform", "Unknown")
@@ -383,7 +492,13 @@ class ComprehensiveBuyTracker(BaseTracker, NetworkSpecificMixins.BaseMixin):
                 token_summary[token] = {
                     "count": 0, "wallets": set(), "total_amount": 0,
                     "platforms": set(), "total_eth_spent": 0, "wallet_scores": [],
-                    "purchases": [], "is_base_native": is_base_native, "total_usd_value": 0
+                    "purchases": [], "is_base_native": is_base_native, "total_usd_value": 0,
+                    # 🚀 NEW: Web3 enhanced fields
+                    "web3_enhanced": self.web3_enabled,
+                    "sophistication_scores": [],
+                    "methods_used": set(),
+                    "avg_gas_efficiency": 0,
+                    "high_sophistication_count": 0
                 }
             
             token_summary[token]["count"] += 1
@@ -399,6 +514,26 @@ class ComprehensiveBuyTracker(BaseTracker, NetworkSpecificMixins.BaseMixin):
             token_summary[token]["purchases"].append(purchase)
             token_summary[token]["total_usd_value"] += self.safe_float_conversion(purchase.get("estimated_usd_value"))
             
+            # 🚀 NEW: Web3 enhanced aggregation
+            if self.web3_enabled:
+                sophistication = purchase.get("sophistication_score", 0)
+                if sophistication > 0:
+                    token_summary[token]["sophistication_scores"].append(sophistication)
+                    if sophistication > 70:
+                        token_summary[token]["high_sophistication_count"] += 1
+                
+                web3_data = purchase.get("web3_analysis", {})
+                method = web3_data.get("method_used", "unknown")
+                if method != "unknown":
+                    token_summary[token]["methods_used"].add(method)
+                
+                gas_efficiency = web3_data.get("gas_efficiency", 0)
+                if gas_efficiency > 0:
+                    current_avg = token_summary[token]["avg_gas_efficiency"]
+                    count = len(token_summary[token]["sophistication_scores"])
+                    if count > 0:
+                        token_summary[token]["avg_gas_efficiency"] = ((current_avg * (count - 1)) + gas_efficiency) / count
+            
             platform_summary[platform] = platform_summary.get(platform, 0) + 1
             
             # Network-specific tracking
@@ -407,8 +542,8 @@ class ComprehensiveBuyTracker(BaseTracker, NetworkSpecificMixins.BaseMixin):
             else:
                 base_native_summary["bridged"] += 1
     
-    def _generate_comprehensive_analysis(self, all_purchases, token_summary, platform_summary, base_native_summary):
-        """Generate analysis results with detailed summary"""
+    def _generate_comprehensive_analysis(self, all_purchases, token_summary, platform_summary, base_native_summary, web3_analysis_summary=None):
+        """Generate enhanced analysis results with Web3 insights"""
         logger.info(f"Generating {self.network} comprehensive analysis...")
         print(f"📊 Generating {self.network.title()} Analysis Results...")
         
@@ -422,7 +557,7 @@ class ComprehensiveBuyTracker(BaseTracker, NetworkSpecificMixins.BaseMixin):
         
         ranked_tokens = self.get_ranked_tokens(token_summary)
         
-        # Enhanced summary output
+        # Enhanced summary output with Web3 data
         unique_wallets = len(set(p.get("wallet_score") for p in all_purchases))
         avg_eth_per_purchase = total_eth_spent / len(all_purchases) if all_purchases else 0
         
@@ -434,8 +569,34 @@ class ComprehensiveBuyTracker(BaseTracker, NetworkSpecificMixins.BaseMixin):
         print(f"💵 Total USD Value: ${total_usd_spent:.0f}")
         print(f"📈 Average per Purchase: {avg_eth_per_purchase:.4f} ETH")
         
+        # 🚀 NEW: Web3 enhanced summary
+        if self.web3_enabled and web3_analysis_summary and web3_analysis_summary["total_transactions_analyzed"] > 0:
+            total_analyzed = web3_analysis_summary["total_transactions_analyzed"]
+            sophisticated_count = web3_analysis_summary["sophisticated_transactions"]
+            sophisticated_pct = (sophisticated_count / total_analyzed) * 100
+            avg_gas_efficiency = web3_analysis_summary["gas_efficiency_avg"]
+            
+            print(f"🧠 Web3 Enhanced Analysis:")
+            print(f"   ⚡ Transactions Analyzed: {total_analyzed}")
+            print(f"   🎯 Sophisticated Trades: {sophisticated_count} ({sophisticated_pct:.1f}%)")
+            print(f"   ⛽ Avg Gas Efficiency: {avg_gas_efficiency:.1f}%")
+            
+            if web3_analysis_summary["method_distribution"]:
+                top_methods = sorted(web3_analysis_summary["method_distribution"].items(), key=lambda x: x[1], reverse=True)[:3]
+                methods_str = ", ".join([f"{method}({count})" for method, count in top_methods])
+                print(f"   🔧 Top Methods: {methods_str}")
+        
         if ranked_tokens:
-            print(f"🏆 Top Token: {ranked_tokens[0][0]} (Score: {ranked_tokens[0][2]})")
+            top_token = ranked_tokens[0]
+            alpha_score = top_token[2]
+            print(f"🏆 Top Token: {top_token[0]} (Alpha Score: {alpha_score})")
+            
+            # Show Web3 insights for top token
+            if self.web3_enabled and top_token[1].get("sophistication_scores"):
+                avg_sophistication = sum(top_token[1]["sophistication_scores"]) / len(top_token[1]["sophistication_scores"])
+                high_soph_count = top_token[1]["high_sophistication_count"]
+                methods_used = len(top_token[1]["methods_used"])
+                print(f"   🧠 Avg Sophistication: {avg_sophistication:.1f} | High-Soph Trades: {high_soph_count} | Methods: {methods_used}")
         
         # Platform breakdown
         if platform_summary:
@@ -471,9 +632,16 @@ class ComprehensiveBuyTracker(BaseTracker, NetworkSpecificMixins.BaseMixin):
         if self.network == "base" and base_native_summary:
             result["base_native_summary"] = base_native_summary
         
+        # 🚀 NEW: Add Web3 analysis summary
+        if self.web3_enabled and web3_analysis_summary:
+            result["web3_analysis"] = web3_analysis_summary
+        
         return result
 
+# Backwards compatibility - update the original class name
+ComprehensiveBuyTracker = Web3EnhancedBuyTracker
+
 # Convenience class for Ethereum
-class EthComprehensiveTracker(ComprehensiveBuyTracker):
+class EthComprehensiveTracker(Web3EnhancedBuyTracker):
     def __init__(self):
         super().__init__("ethereum")
