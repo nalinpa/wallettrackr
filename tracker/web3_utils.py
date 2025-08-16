@@ -4,7 +4,6 @@ import logging
 import time
 import json
 from datetime import datetime
-import httpx
 
 from .tracker_utils import TokenUtils, ContractUtils, NetworkConfig
 from config.settings import alchemy_config
@@ -17,15 +16,6 @@ class Web3Manager:
     def __init__(self):
         self.connections = {}
         self.supported_networks = ["ethereum", "base"]
-        
-        self.http_client = httpx.Client(
-            timeout=httpx.Timeout(30.0),
-            limits=httpx.Limits(
-                max_connections=10,
-                max_keepalive_connections=5
-            ),
-            http2=True
-        )
     
     def get_web3(self, network: str) -> Web3:
         """Get or create Web3 connection for network"""
@@ -34,11 +24,11 @@ class Web3Manager:
                 network_config = NetworkConfig.get_config(network)
                 alchemy_url = network_config['alchemy_url']
                 
+                # Create HTTPProvider with just timeout
                 self.connections[network] = Web3(Web3.HTTPProvider(
                     alchemy_url,
                     request_kwargs={
-                        'timeout': alchemy_config.timeout_seconds,
-                        'session': self.http_client  # Use httpx session
+                        'timeout': alchemy_config.timeout_seconds
                     }
                 ))
                 
@@ -57,10 +47,8 @@ class Web3Manager:
     
     def close_connections(self):
         """Close all connections"""
-        try:
-            self.http_client.close()
-        except Exception as e:
-            logger.warning(f"Error closing httpx client: {e}")
+        # Web3 connections don't need explicit closing
+        logger.info("Web3 connections closed")
     
     def test_all_connections(self) -> Dict[str, bool]:
         """Test all network connections"""

@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 import json
-from flask import Blueprint
-import requests
+from flask import Blueprint, request, jsonify, Response
+import httpx  # Use httpx instead of requests
 import io
 import sys
 from contextlib import redirect_stdout, redirect_stderr
@@ -15,9 +15,131 @@ import traceback
 # Assuming these imports exist
 from tracker.buy_tracker import ComprehensiveBuyTracker
 from tracker.sell_tracker import ComprehensiveSellTracker
-from config.settings import settings, monitor_config, telegram_config
+from config.settings import settings, monitor_config, telegram_config, analysis_config
+
+# Try to import orjson utilities from your utils
+try:
+    from utils.json_utils import orjson_dumps_str, sanitize_for_orjson, benchmark_json_performance, ORJSON_AVAILABLE
+    logger = logging.getLogger(__name__)
+    logger.info("✅ orjson utilities loaded from utils.json_utils")
+except ImportError:
+    # Fallback: try direct orjson import
+    try:
+        import orjson
+        ORJSON_AVAILABLE = True
+        logger = logging.getLogger(__name__)
+        logger.info("✅ orjson available (direct import fallback)")
+        
+        # Create minimal compatibility functions
+        def orjson_dumps_str(data):
+            return orjson.dumps(data, option=orjson.OPT_NAIVE_UTC).decode('utf-8')
+        
+        def sanitize_for_orjson(obj):
+            if isinstance(obj, set):
+                return list(obj)
+            elif isinstance(obj, dict):
+                return {k: sanitize_for_orjson(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [sanitize_for_orjson(item) for item in obj]
+            elif isinstance(obj, tuple):
+                return list(sanitize_for_orjson(item) for item in obj)
+            elif hasattr(obj, '__dict__'):
+                return sanitize_for_orjson(obj.__dict__)
+            else:
+                return obj
+        
+        def benchmark_json_performance(data, iterations=10):
+            import timeit
+            import json
+            sanitized_data = sanitize_for_orjson(data)
+            std_time = timeit.timeit(lambda: json.dumps(sanitized_data, default=str), number=iterations)
+            orjson_time = timeit.timeit(lambda: orjson.dumps(sanitized_data, option=orjson.OPT_NAIVE_UTC), number=iterations)
+            speedup = std_time / orjson_time if orjson_time > 0 else 1.0
+            return {'serialize_speedup': speedup, 'std_json_time': std_time, 'orjson_time': orjson_time, 'iterations': iterations}
+        
+    except ImportError:
+        ORJSON_AVAILABLE = False
+        logger = logging.getLogger(__name__)
+        logger.warning("⚠️  orjson not available, using standard JSON. Install with: pip install orjson")
+
+# Create httpx client for better performance
+http_client = httpx.Client(
+    timeout=httpx.Timeout(30.0),
+    limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+    http2=True
+)
 
 logger = logging.getLogger(__name__)
+
+def orjson_response(data, status_code=200):
+    """Create a Flask response using orjson for better performance"""
+    if not ORJSON_AVAILABLE:
+        return jsonify(data), status_code
+        
+    try:
+        # Sanitize data for orjson (convert sets to lists, etc.)
+        sanitized_data = sanitize_for_orjson(data)
+        
+        # Serialize with orjson for better performance
+        json_bytes = orjson.dumps(sanitized_data, option=orjson.OPT_NAIVE_UTC)
+        
+        # Create response
+        response = Response(
+            json_bytes,
+            status=status_code,
+            mimetype='application/json'
+        )
+        return response
+    except Exception as e:
+        logger.error(f"orjson response creation failed: {e}")
+        # Fallback to standard jsonify
+        return jsonify(data), status_code
+
+def sanitize_for_orjson(obj):
+    """Sanitize data for orjson serialization"""
+    if isinstance(obj, set):
+        return list(obj)
+    elif isinstance(obj, dict):
+        return {k: sanitize_for_orjson(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [sanitize_for_orjson(item) for item in obj]
+    elif isinstance(obj, tuple):
+        return list(sanitize_for_orjson(item) for item in obj)
+    elif hasattr(obj, '__dict__'):
+        return sanitize_for_orjson(obj.__dict__)
+    else:
+        return obj
+
+def benchmark_json_performance(data, iterations=10):
+    """Benchmark orjson vs standard json performance"""
+    if not ORJSON_AVAILABLE:
+        return {'serialize_speedup': 1.0, 'note': 'orjson not available'}
+    
+    import timeit
+    
+    # Sanitize data once
+    sanitized_data = sanitize_for_orjson(data)
+    
+    # Benchmark standard json
+    std_time = timeit.timeit(
+        lambda: json.dumps(sanitized_data, default=str),
+        number=iterations
+    )
+    
+    # Benchmark orjson
+    orjson_time = timeit.timeit(
+        lambda: orjson.dumps(sanitized_data, option=orjson.OPT_NAIVE_UTC),
+        number=iterations
+    )
+    
+    speedup = std_time / orjson_time if orjson_time > 0 else 1.0
+    
+    return {
+        'serialize_speedup': speedup,
+        'std_json_time': std_time,
+        'orjson_time': orjson_time,
+        'iterations': iterations
+    }
 
 @dataclass
 class Alert:
@@ -42,7 +164,7 @@ class Alert:
         }
 
 class TelegramNotifier:
-    """Telegram notification handler"""
+    """Telegram notification handler using httpx"""
     
     def __init__(self, bot_token: str = None, chat_id: str = None):
         self.bot_token = bot_token
@@ -52,12 +174,12 @@ class TelegramNotifier:
         self.alert_cooldown_hours = 2
         
         if self.enabled:
-            logger.info(f"Telegram notifications enabled for chat: {chat_id}")
+            logger.info(f"✅ Telegram notifications enabled with httpx for chat: {chat_id}")
         else:
-            logger.debug("Telegram notifications disabled (missing bot_token or chat_id)")
+            logger.debug("⚠️  Telegram notifications disabled (missing bot_token or chat_id)")
     
     def send_alert(self, alert: Alert) -> bool:
-        """Send alert to Telegram with DEX links"""
+        """Send alert to Telegram using httpx"""
         if not self.enabled:
             return False
         
@@ -115,7 +237,7 @@ class TelegramNotifier:
                 message += f"\n📊 [Search DexScreener](https://dexscreener.com/search?q={alert.token})"
                 message += f"\n🦄 [Search Uniswap](https://app.uniswap.org/)"
             
-            # Send to Telegram
+            # Send to Telegram using httpx
             url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
             payload = {
                 'chat_id': self.chat_id,
@@ -124,21 +246,22 @@ class TelegramNotifier:
                 'disable_web_page_preview': True
             }
             
-            response = requests.post(url, json=payload, timeout=10)
+            # Use httpx instead of requests
+            response = http_client.post(url, json=payload, timeout=10)
             
             if response.status_code == 200:
-                logger.info(f"✅ Telegram alert sent for {alert.token}")
+                logger.info(f"✅ Telegram alert sent via httpx for {alert.token}")
                 return True
             else:
-                logger.error(f"❌ Telegram API error: {response.status_code} - {response.text}")
+                logger.error(f"❌ Telegram API error via httpx: {response.status_code} - {response.text}")
                 return False
                 
         except Exception as e:
-            logger.error(f"❌ Error sending Telegram alert: {e}")
+            logger.error(f"❌ Error sending Telegram alert via httpx: {e}")
             return False
     
 class EnhancedMonitor:
-    """Enhanced monitor with rich console output like the trackers"""
+    """Enhanced monitor with orjson and httpx performance optimizations"""
     
     def __init__(self):
         self.is_running = False
@@ -175,6 +298,12 @@ class EnhancedMonitor:
         }
         
         self.alert_thresholds = monitor_config.alert_thresholds.copy()
+        
+        # Log performance optimizations
+        logger.info(f"🚀 Enhanced Monitor initialized:")
+        logger.info(f"   📊 orjson: {'✅ Available' if ORJSON_AVAILABLE else '❌ Not available'}")
+        logger.info(f"   🌐 httpx: ✅ Available with HTTP/2 support")
+        logger.info(f"   📱 Telegram: {'✅ Enabled' if self.telegram.enabled else '❌ Disabled'}")
     
     def start_monitoring(self) -> Dict:
         """Start the monitoring with enhanced console output"""
@@ -188,6 +317,9 @@ class EnhancedMonitor:
         print(f"   🕐 Check Interval: {self.config['check_interval_minutes']} minutes")
         print(f"   🌐 Networks: {', '.join(self.config['networks'])}")
         print(f"   👥 Wallets per check: {self.config['num_wallets']}")
+        print(f"   ⚡ Performance Optimizations:")
+        print(f"      📊 orjson: {'✅ Enabled' if ORJSON_AVAILABLE else '❌ Standard JSON'}")
+        print(f"      🌐 httpx: ✅ HTTP/2 with connection pooling")
         print(f"   🎯 Alert Thresholds:")
         for threshold, value in self.alert_thresholds.items():
             print(f"      {threshold}: {value}")
@@ -203,7 +335,12 @@ class EnhancedMonitor:
         return {
             'status': 'success', 
             'message': 'Monitor started with enhanced logging',
-            'config': self.config
+            'config': self.config,
+            'performance': {
+                'orjson_enabled': ORJSON_AVAILABLE,
+                'httpx_enabled': True,
+                'telegram_enabled': self.telegram.enabled
+            }
         }
     
     def stop_monitoring(self) -> Dict:
@@ -218,6 +355,9 @@ class EnhancedMonitor:
         print(f"   🚨 Total Alerts: {self.total_alerts}")
         print(f"   🪙 Known Tokens: {len(self.known_tokens)}")
         print(f"   💰 Seen Purchases: {self.seen_purchases}")
+        print(f"   ⚡ Performance:")
+        print(f"      📊 orjson: {'✅ Used' if ORJSON_AVAILABLE else '❌ Standard JSON'}")
+        print(f"      🌐 httpx: ✅ Used for all HTTP requests")
         if self.last_check:
             print(f"   🕐 Last Check: {self.last_check.strftime('%Y-%m-%d %H:%M:%S')}")
         print("="*70)
@@ -250,7 +390,7 @@ class EnhancedMonitor:
 
     def _monitor_loop(self):
         """Main monitoring loop with enhanced output"""
-        print(f"🔄 Monitor loop started - checking every {self.config['check_interval_minutes']} minutes")
+        print(f"🔄 Monitor loop started with httpx - checking every {self.config['check_interval_minutes']} minutes")
         
         while self.is_running:
             try:
@@ -305,6 +445,7 @@ class EnhancedMonitor:
         print("🔍 STARTING TOKEN ANALYSIS CYCLE")
         print("="*70)
         print(f"🕐 Check Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"⚡ Using httpx with HTTP/2 for optimal performance")
         
         self.last_check = datetime.now()
         cycle_alerts = []
@@ -380,6 +521,9 @@ class EnhancedMonitor:
         print(f"   🪙 Known Tokens: {len(self.known_tokens)}")
         print(f"   💰 Total Purchases: {self.seen_purchases}")
         print(f"   🚨 Total Alerts: {self.total_alerts}")
+        print(f"⚡ Performance Status:")
+        print(f"   📊 JSON: {'orjson (optimized)' if ORJSON_AVAILABLE else 'standard json'}")
+        print(f"   🌐 HTTP: httpx with HTTP/2")
         print("="*70)
         
         if cycle_alerts:
@@ -396,7 +540,7 @@ class EnhancedMonitor:
         
         try:
             # Buy analysis with console capture
-            print(f"🔍 Analyzing {network} buy activity...")
+            print(f"🔍 Analyzing {network} buy activity with httpx...")
             
             buy_tracker = ComprehensiveBuyTracker(network)
             
@@ -409,18 +553,6 @@ class EnhancedMonitor:
             # Use configured wallet count
             monitor_wallets = self.config['num_wallets']
             print(f"📊 Analyzing {monitor_wallets} top {network} wallets...")
-            
-            # Capture and relay progress from buy tracker
-            class ProgressCapture:
-                def __init__(self, network_name):
-                    self.network_name = network_name
-                    self.original_print = print
-                
-                def write(self, text):
-                    if text.strip():
-                        # Relay important progress messages to monitor console
-                        if any(keyword in text for keyword in ['Processing wallet', 'Found', 'purchases', 'tokens']):
-                            print(f"   📊 {self.network_name}: {text.strip()}")
             
             buy_results = buy_tracker.analyze_all_trading_methods(
                 num_wallets=monitor_wallets,
@@ -512,30 +644,18 @@ class EnhancedMonitor:
                 if line.strip():
                     print(f"   🔍 Error detail: {line.strip()}")
                     
+        # Clean up connections
         try:
             buy_tracker.close_connections()
+        except:
+            pass
+        try:
+            sell_tracker.close_connections()
         except:
             pass
         
         return alerts   
  
-    def _should_alert_for_token(self, token: str, alert_type: str) -> bool:
-        """Check if we should alert for this token (avoid duplicates)"""
-        now = datetime.now()
-        alert_key = f"{token}_{alert_type}"
-        
-        if alert_key in self.recent_alerts:
-            last_alert_time = self.recent_alerts[alert_key]
-            time_diff = now - last_alert_time
-            
-            if time_diff.total_seconds() < (self.alert_cooldown_hours * 3600):
-                hours_remaining = self.alert_cooldown_hours - (time_diff.total_seconds() / 3600)
-                print(f"🔕 Skipping duplicate alert for {token} (cooldown: {hours_remaining:.1f}h remaining)")
-                return False
-        
-        self.recent_alerts[alert_key] = now
-        return True
-    
     def _process_buy_results(self, network: str, results: Dict) -> List[Alert]:
         """Process buy results and generate alerts"""
         alerts = []
@@ -634,7 +754,7 @@ class EnhancedMonitor:
         if not self.telegram.enabled:
             return {'success': False, 'message': 'Telegram not configured in settings'}
         
-        test_message = f"🧪 *Test Alert*\n\nMonitor is working!\n🕐 {datetime.now().strftime('%H:%M:%S')}"
+        test_message = f"🧪 *Test Alert*\n\nMonitor is working with httpx!\n🕐 {datetime.now().strftime('%H:%M:%S')}"
         
         try:
             url = f"https://api.telegram.org/bot{self.telegram.bot_token}/sendMessage"
@@ -644,15 +764,17 @@ class EnhancedMonitor:
                 'parse_mode': 'Markdown'
             }
             
-            response = requests.post(url, json=payload, timeout=10)
+            # Use httpx instead of requests
+            response = http_client.post(url, json=payload, timeout=10)
             success = response.status_code == 200
             
             return {
                 'success': success,
-                'message': 'Test message sent!' if success else f'Error: {response.text}'
+                'message': 'Test message sent via httpx!' if success else f'Error: {response.text}',
+                'transport': 'httpx'
             }
         except Exception as e:
-            return {'success': False, 'message': str(e)}
+            return {'success': False, 'message': str(e), 'transport': 'httpx'}
     
     def _determine_confidence(self, wallet_count: int, total_eth: float, alpha_score: float) -> str:
         """Determine confidence level for buy alerts"""
@@ -684,7 +806,7 @@ class EnhancedMonitor:
         if self.notification_channels.get('telegram', False):
             success = self.telegram.send_alert(alert)
             if success:
-                print(f"📱 Telegram alert sent for {alert.token}")
+                print(f"📱 Telegram alert sent via httpx for {alert.token}")
             else:
                 print(f"❌ Failed to send Telegram alert for {alert.token}")
         
@@ -695,11 +817,6 @@ class EnhancedMonitor:
                 f.write(f"{alert.timestamp.isoformat()} - {alert.message}\n")
         except Exception as e:
             logger.error(f"Failed to log alert to file: {e}")
-    
-    def _send_webhook_alert(self, alert: Alert):
-        """Send alert via webhook (placeholder)"""
-        # Implementation would depend on webhook configuration
-        pass
     
     def get_status(self) -> Dict:
         """Get monitor status with enhanced information"""
@@ -715,6 +832,11 @@ class EnhancedMonitor:
                 'total_alerts': self.total_alerts,
                 'known_tokens': len(self.known_tokens),
                 'seen_purchases': self.seen_purchases
+            },
+            'performance': {
+                'orjson_enabled': ORJSON_AVAILABLE,
+                'httpx_enabled': True,
+                'telegram_enabled': self.telegram.enabled
             }
         }
     
@@ -731,59 +853,456 @@ monitor_bp = Blueprint('monitor', __name__)
 
 @monitor_bp.route('/status', methods=['GET'])
 def get_monitor_status():
-    """Get monitor status"""
+    """Get monitor status with orjson optimization"""
     try:
-        status = monitor.get_status()
-        return {'status': 'success', 'data': status}
+        logger.info("Monitor status request received")
+        
+        if monitor:
+            status = monitor.get_status()
+            logger.info(f"Monitor status: Running={status.get('is_running', False)}")
+            
+            # Add orjson performance metrics for large responses
+            if ORJSON_AVAILABLE and len(str(status)) > 2000:
+                perf_metrics = benchmark_json_performance(status, iterations=20)
+                status['performance_metrics'] = {
+                    'orjson_speedup': round(perf_metrics['serialize_speedup'], 1),
+                    'json_size_bytes': len(str(status))
+                }
+            
+            return orjson_response({'status': 'success', 'data': status})
+        else:
+            logger.warning("Monitor not initialized, returning default status")
+            default_status = {
+                'is_running': False,
+                'error': 'Monitor not initialized',
+                'last_check': None,
+                'next_check': None,
+                'performance': {
+                    'orjson_enabled': ORJSON_AVAILABLE,
+                    'httpx_enabled': True,
+                    'telegram_enabled': False
+                },
+                'config': {
+                    'check_interval_minutes': monitor_config.default_check_interval_minutes,
+                    'networks': [net.value for net in monitor_config.default_networks],
+                    'num_wallets': 173,
+                    'use_interval_for_timeframe': True
+                },
+                'notification_channels': {
+                    'console': True,
+                    'file': True,
+                    'webhook': False
+                },
+                'alert_thresholds': monitor_config.alert_thresholds,
+                'recent_alerts': [],
+                'stats': {
+                    'total_alerts': 0,
+                    'known_tokens': 0,
+                    'seen_purchases': 0
+                }
+            }
+            return orjson_response(default_status)
+            
     except Exception as e:
         logger.error(f"Error getting monitor status: {e}", exc_info=True)
-        return {'status': 'error', 'message': str(e)}, 500
+        error_response = {
+            'is_running': False,
+            'error': str(e),
+            'last_check': None,
+            'next_check': None,
+            'performance': {
+                'orjson_enabled': ORJSON_AVAILABLE,
+                'httpx_enabled': True,
+                'telegram_enabled': False
+            },
+            'config': {},
+            'notification_channels': {},
+            'alert_thresholds': {},
+            'recent_alerts': []
+        }
+        return orjson_response(error_response, 500)
 
 @monitor_bp.route('/start', methods=['POST'])
 def start_monitor():
-    """Start the monitor"""
+    """Start the automated monitoring with performance optimizations"""
     try:
-        result = monitor.start_monitoring()
-        return result
+        logger.info("Monitor start request received")
+        if monitor:
+            result = monitor.start_monitoring()
+            logger.info(f"Monitor start result: {result}")
+            return orjson_response(result)
+        else:
+            error_data = {
+                'status': 'error', 
+                'message': 'Monitor not available',
+                'performance': {
+                    'orjson_enabled': ORJSON_AVAILABLE,
+                    'httpx_enabled': True
+                }
+            }
+            return orjson_response(error_data, 500)
     except Exception as e:
         logger.error(f"Error starting monitor: {e}", exc_info=True)
-        return {'status': 'error', 'message': str(e)}, 500
+        error_data = {
+            'status': 'error', 
+            'message': str(e),
+            'performance': {
+                'orjson_enabled': ORJSON_AVAILABLE,
+                'httpx_enabled': True
+            }
+        }
+        return orjson_response(error_data, 500)
 
 @monitor_bp.route('/stop', methods=['POST'])
 def stop_monitor():
-    """Stop the monitor"""
+    """Stop the automated monitoring"""
     try:
-        result = monitor.stop_monitoring()
-        return result
+        logger.info("Monitor stop request received")
+        if monitor:
+            result = monitor.stop_monitoring()
+            logger.info(f"Monitor stop result: {result}")
+            return orjson_response(result)
+        else:
+            error_data = {
+                'status': 'error', 
+                'message': 'Monitor not available',
+                'performance': {
+                    'orjson_enabled': ORJSON_AVAILABLE,
+                    'httpx_enabled': True
+                }
+            }
+            return orjson_response(error_data, 500)
     except Exception as e:
         logger.error(f"Error stopping monitor: {e}", exc_info=True)
-        return {'status': 'error', 'message': str(e)}, 500
+        error_data = {
+            'status': 'error', 
+            'message': str(e),
+            'performance': {
+                'orjson_enabled': ORJSON_AVAILABLE,
+                'httpx_enabled': True
+            }
+        }
+        return orjson_response(error_data, 500)
 
 @monitor_bp.route('/check-now', methods=['POST'])
 def check_now():
-    """Trigger immediate check"""
+    """Trigger an immediate check"""
     try:
+        logger.info("Immediate check requested")
+        print("\n" + "="*60)
+        print("🔍 IMMEDIATE CHECK REQUESTED (httpx + orjson)")
+        print("="*60)
+        
+        if not monitor:
+            logger.error("Monitor not available")
+            error_data = {
+                'status': 'error', 
+                'message': 'Monitor not available',
+                'performance': {
+                    'orjson_enabled': ORJSON_AVAILABLE,
+                    'httpx_enabled': True
+                }
+            }
+            return orjson_response(error_data, 500)
+        
+        # Run the check in a background thread
         def run_check():
-            monitor.check_for_new_tokens()
+            try:
+                print("🚀 Starting immediate check with httpx in background thread...")
+                monitor.check_for_new_tokens()
+                print("✅ Immediate check completed with httpx!")
+            except Exception as e:
+                logger.error(f"Error during immediate check: {e}", exc_info=True)
         
         thread = threading.Thread(target=run_check)
         thread.daemon = True
         thread.start()
         
-        return {'status': 'success', 'message': 'Check initiated'}
+        success_data = {
+            'status': 'success', 
+            'message': 'Check initiated with httpx - see console for output',
+            'performance': {
+                'orjson_enabled': ORJSON_AVAILABLE,
+                'httpx_enabled': True,
+                'http2_enabled': True
+            }
+        }
+        return orjson_response(success_data)
     except Exception as e:
-        logger.error(f"Error running immediate check: {e}", exc_info=True)
-        return {'status': 'error', 'message': str(e)}, 500
-    
+        logger.error(f"Error initiating check: {e}", exc_info=True)
+        error_data = {
+            'status': 'error', 
+            'message': str(e),
+            'performance': {
+                'orjson_enabled': ORJSON_AVAILABLE,
+                'httpx_enabled': True
+            }
+        }
+        return orjson_response(error_data, 500)
+
+@monitor_bp.route('/config', methods=['GET', 'POST'])
+def monitor_config_endpoint():
+    """Get or update monitor configuration"""
+    try:
+        if not monitor:
+            if request.method == 'POST':
+                error_data = {
+                    'status': 'error', 
+                    'message': 'Monitor not available',
+                    'performance': {'orjson_enabled': ORJSON_AVAILABLE, 'httpx_enabled': True}
+                }
+                return orjson_response(error_data, 500)
+            else:
+                default_config = {
+                    'check_interval_minutes': monitor_config.default_check_interval_minutes,
+                    'networks': [net.value for net in monitor_config.default_networks],
+                    'num_wallets': 173,
+                    'use_interval_for_timeframe': True,
+                    'alert_thresholds': monitor_config.alert_thresholds,
+                    'performance': {'orjson_enabled': ORJSON_AVAILABLE, 'httpx_enabled': True}
+                }
+                return orjson_response(default_config)
+            
+        if request.method == 'POST':
+            logger.info("Monitor config update request received")
+            new_config = request.json
+            logger.info(f"New config: {new_config}")
+            
+            # Validate config against settings limits
+            if 'check_interval_minutes' in new_config:
+                interval = new_config['check_interval_minutes']
+                if interval < monitor_config.min_check_interval_minutes:
+                    error_data = {
+                        'status': 'error', 
+                        'message': f'Interval cannot be less than {monitor_config.min_check_interval_minutes} minutes',
+                        'performance': {'orjson_enabled': ORJSON_AVAILABLE, 'httpx_enabled': True}
+                    }
+                    return orjson_response(error_data, 400)
+                if interval > monitor_config.max_check_interval_minutes:
+                    error_data = {
+                        'status': 'error', 
+                        'message': f'Interval cannot exceed {monitor_config.max_check_interval_minutes} minutes',
+                        'performance': {'orjson_enabled': ORJSON_AVAILABLE, 'httpx_enabled': True}
+                    }
+                    return orjson_response(error_data, 400)
+            
+            monitor.config.update(new_config)
+            monitor.save_config()
+            
+            response_data = {
+                'status': 'success', 
+                'config': monitor.config,
+                'performance': {'orjson_enabled': ORJSON_AVAILABLE, 'httpx_enabled': True}
+            }
+            return orjson_response(response_data)
+        
+        logger.info("Monitor config request received")
+        config_data = monitor.config.copy()
+        config_data['performance'] = {'orjson_enabled': ORJSON_AVAILABLE, 'httpx_enabled': True}
+        return orjson_response(config_data)
+    except Exception as e:
+        logger.error(f"Error with monitor config: {e}", exc_info=True)
+        error_data = {
+            'status': 'error', 
+            'message': str(e),
+            'performance': {'orjson_enabled': ORJSON_AVAILABLE, 'httpx_enabled': True}
+        }
+        return orjson_response(error_data, 500)
+
+@monitor_bp.route('/alerts', methods=['GET'])
+def get_alerts():
+    """Get recent alerts with orjson performance"""
+    try:
+        logger.info("Alerts request received")
+        if not monitor:
+            return orjson_response([])
+            
+        limit = request.args.get('limit', monitor_config.max_stored_alerts, type=int)
+        limit = min(limit, monitor_config.max_stored_alerts)
+        
+        # Convert alerts to dict format for orjson serialization
+        alerts_data = []
+        for alert in monitor.alerts[-limit:]:
+            alert_dict = alert.to_dict()
+            # Ensure all data is orjson-serializable
+            sanitized_alert = sanitize_for_orjson(alert_dict)
+            alerts_data.append(sanitized_alert)
+        
+        # Add performance info if orjson is used for large responses
+        if ORJSON_AVAILABLE and len(alerts_data) > 50:
+            perf_metrics = benchmark_json_performance(alerts_data, iterations=10)
+            logger.info(f"orjson speedup for {len(alerts_data)} alerts: {perf_metrics['serialize_speedup']:.1f}x")
+        
+        logger.info(f"Returning {len(alerts_data)} alerts with {'orjson' if ORJSON_AVAILABLE else 'standard JSON'}")
+        return orjson_response(alerts_data)
+    except Exception as e:
+        logger.error(f"Error getting alerts: {e}", exc_info=True)
+        return orjson_response([])
+
+@monitor_bp.route('/thresholds', methods=['POST'])
+def update_thresholds():
+    """Update alert thresholds"""
+    try:
+        if not monitor:
+            error_data = {
+                'status': 'error', 
+                'message': 'Monitor not available',
+                'performance': {'orjson_enabled': ORJSON_AVAILABLE, 'httpx_enabled': True}
+            }
+            return orjson_response(error_data, 500)
+            
+        logger.info("Threshold update request received")
+        thresholds = request.json
+        logger.info(f"New thresholds: {thresholds}")
+        
+        # Validate thresholds
+        if 'min_wallets' in thresholds and thresholds['min_wallets'] < 1:
+            error_data = {
+                'status': 'error', 
+                'message': 'min_wallets must be at least 1',
+                'performance': {'orjson_enabled': ORJSON_AVAILABLE, 'httpx_enabled': True}
+            }
+            return orjson_response(error_data, 400)
+        
+        monitor.alert_thresholds.update(thresholds)
+        
+        response_data = {
+            'status': 'success', 
+            'thresholds': monitor.alert_thresholds,
+            'performance': {'orjson_enabled': ORJSON_AVAILABLE, 'httpx_enabled': True}
+        }
+        return orjson_response(response_data)
+    except Exception as e:
+        logger.error(f"Error updating thresholds: {e}", exc_info=True)
+        error_data = {
+            'status': 'error', 
+            'message': str(e),
+            'performance': {'orjson_enabled': ORJSON_AVAILABLE, 'httpx_enabled': True}
+        }
+        return orjson_response(error_data, 500)
+
+@monitor_bp.route('/notifications', methods=['POST'])
+def update_notifications():
+    """Update notification settings"""
+    try:
+        if not monitor:
+            error_data = {
+                'status': 'error', 
+                'message': 'Monitor not available',
+                'performance': {'orjson_enabled': ORJSON_AVAILABLE, 'httpx_enabled': True}
+            }
+            return orjson_response(error_data, 500)
+            
+        logger.info("Notification settings update request received")
+        notification_settings = request.json
+        logger.info(f"New settings: {notification_settings}")
+        monitor.notification_channels.update(notification_settings)
+        
+        response_data = {
+            'status': 'success', 
+            'channels': monitor.notification_channels,
+            'performance': {'orjson_enabled': ORJSON_AVAILABLE, 'httpx_enabled': True}
+        }
+        return orjson_response(response_data)
+    except Exception as e:
+        logger.error(f"Error updating notifications: {e}", exc_info=True)
+        error_data = {
+            'status': 'error', 
+            'message': str(e),
+            'performance': {'orjson_enabled': ORJSON_AVAILABLE, 'httpx_enabled': True}
+        }
+        return orjson_response(error_data, 500)
+
+@monitor_bp.route('/test', methods=['GET'])
+def test_monitor():
+    """Test endpoint with performance info"""
+    try:
+        logger.info("Monitor test endpoint called")
+        
+        test_results = {
+            'monitor_available': monitor is not None,
+            'monitor_module': False,
+            'base_tracker': False,
+            'eth_tracker': False,
+            'settings_loaded': True,
+            'alchemy_config': bool(analysis_config) if 'analysis_config' in globals() else False,
+            'performance': {
+                'orjson_available': ORJSON_AVAILABLE,
+                'httpx_available': True,
+                'http2_support': True
+            }
+        }
+        
+        # Test monitor module
+        if monitor:
+            test_results['monitor_module'] = hasattr(monitor, 'get_status')
+        
+        # Test trackers
+        try:
+            tracker = ComprehensiveBuyTracker("base")
+            test_results['base_tracker'] = hasattr(tracker, 'test_connection')
+        except Exception as e:
+            logger.warning(f"Base tracker test failed: {e}")
+        
+        try:
+            tracker = ComprehensiveBuyTracker("ethereum")
+            test_results['eth_tracker'] = hasattr(tracker, 'test_connection')
+        except Exception as e:
+            logger.warning(f"ETH tracker test failed: {e}")
+        
+        response_data = {
+            'status': 'success',
+            'message': f'Monitor test completed with {"orjson + httpx" if ORJSON_AVAILABLE else "httpx"}',
+            'results': test_results,
+            'settings_info': {
+                'environment': settings.environment,
+                'supported_networks': [net.value for net in settings.monitor.supported_networks],
+                'default_wallet_count': 173,
+                'excluded_tokens_count': len(analysis_config.excluded_tokens),
+                'performance_optimizations': {
+                    'orjson_enabled': ORJSON_AVAILABLE,
+                    'httpx_enabled': True,
+                    'http2_enabled': True,
+                    'connection_pooling': True
+                }
+            }
+        }
+        
+        return orjson_response(response_data)
+        
+    except Exception as e:
+        logger.error(f"Monitor test failed: {e}", exc_info=True)
+        error_data = {
+            'status': 'error',
+            'message': f'Monitor test failed: {str(e)}',
+            'results': test_results if 'test_results' in locals() else {},
+            'performance': {'orjson_enabled': ORJSON_AVAILABLE, 'httpx_enabled': True}
+        }
+        return orjson_response(error_data, 500)
+
 @monitor_bp.route('/telegram/test', methods=['POST'])
 def test_telegram():
-    """Test Telegram connection"""
+    """Test Telegram connection with httpx"""
     try:
+        if not monitor:
+            error_data = {
+                'success': False, 
+                'message': 'Monitor not available',
+                'performance': {'orjson_enabled': ORJSON_AVAILABLE, 'httpx_enabled': True}
+            }
+            return orjson_response(error_data, 500)
+            
         result = monitor.test_telegram()
-        return result
+        result['performance'] = {'orjson_enabled': ORJSON_AVAILABLE, 'httpx_enabled': True}
+        return orjson_response(result)
     except Exception as e:
         logger.error(f"Error testing Telegram: {e}", exc_info=True)
-        return {'status': 'error', 'message': str(e)}, 500
+        error_data = {
+            'success': False, 
+            'message': str(e),
+            'performance': {'orjson_enabled': ORJSON_AVAILABLE, 'httpx_enabled': True}
+        }
+        return orjson_response(error_data, 500)
 
 # Export both the monitor instance and blueprint
 __all__ = ['monitor', 'monitor_bp']

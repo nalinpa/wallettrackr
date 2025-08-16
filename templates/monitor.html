@@ -180,6 +180,39 @@
         from { opacity: 0.5; }
         to { opacity: 1; }
     }
+
+    .error-message {
+        background: rgba(220, 53, 69, 0.2);
+        border: 1px solid #dc3545;
+        border-radius: 8px;
+        padding: 15px;
+        margin: 10px 0;
+        color: #fff;
+    }
+
+    .loading-message {
+        background: rgba(23, 162, 184, 0.2);
+        border: 1px solid #17a2b8;
+        border-radius: 8px;
+        padding: 15px;
+        margin: 10px 0;
+        color: #fff;
+        text-align: center;
+    }
+
+    .retry-button {
+        background: #dc3545;
+        color: white;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 4px;
+        margin-top: 10px;
+        cursor: pointer;
+    }
+
+    .retry-button:hover {
+        background: #c82333;
+    }
 </style>
 {% endblock %}
 
@@ -351,6 +384,121 @@ let isMonitorRunning = false;
 let autoScroll = true;
 let consolePaused = false;
 let consoleBuffer = [];
+let apiCallsInProgress = new Set();
+
+// Enhanced API call function with better error handling
+async function makeApiCall(url, options = {}) {
+    const requestId = Date.now() + Math.random();
+    
+    try {
+        console.log(`[API] Starting call to: ${url}`);
+        apiCallsInProgress.add(requestId);
+        
+        const response = await fetch(url, {
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                ...options.headers
+            },
+            ...options
+        });
+
+        console.log(`[API] Response status: ${response.status} for ${url}`);
+
+        if (!response.ok) {
+            // Get error text for better debugging
+            let errorText = '';
+            try {
+                errorText = await response.text();
+            } catch (e) {
+                errorText = 'Could not read error response';
+            }
+            
+            throw new Error(`HTTP ${response.status}: ${response.statusText}. Response: ${errorText.substring(0, 200)}`);
+        }
+
+        // Check if response is JSON
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+            const text = await response.text();
+            console.error(`[API] Non-JSON response from ${url}:`, text);
+            
+            // Check if this is an HTML error page
+            if (text.includes('<!DOCTYPE') || text.includes('<html')) {
+                throw new Error(`Server returned HTML error page instead of JSON. This usually indicates a server error or incorrect endpoint. Check server logs.`);
+            }
+            
+            throw new Error(`Expected JSON but got ${contentType}. Response: ${text.substring(0, 200)}...`);
+        }
+
+        const data = await response.json();
+        console.log(`[API] Success for ${url}:`, data);
+        return data;
+
+    } catch (error) {
+        console.error(`[API] Failed for ${url}:`, error);
+        
+        // Enhanced error messages for common issues
+        if (error.message.includes('Failed to fetch')) {
+            error.message = `Network error: Could not connect to server. Check if the server is running on the correct port.`;
+        } else if (error.message.includes('HTML error page')) {
+            error.message = `Server error: The monitor API endpoint returned an error page. Check server logs for details.`;
+        }
+        
+        throw error;
+    } finally {
+        apiCallsInProgress.delete(requestId);
+    }
+}
+
+// Enhanced error display function
+function showApiError(endpoint, error, containerId = null) {
+    const errorHtml = `
+        <div class="error-message">
+            <strong>❌ API Error (${endpoint}):</strong><br>
+            ${error.message}<br>
+            <small>
+                <strong>Troubleshooting:</strong><br>
+                • Check if the Flask server is running<br>
+                • Verify the monitor endpoints are configured<br>
+                • Check server console for error details<br>
+                • Try refreshing the page<br>
+            </small>
+            <button class="retry-button" onclick="retryApiCall('${endpoint}', '${containerId}')">
+                🔄 Retry
+            </button>
+        </div>
+    `;
+    
+    if (containerId) {
+        const container = document.getElementById(containerId);
+        if (container) {
+            container.innerHTML = errorHtml;
+        }
+    }
+    
+    log(`❌ API Error (${endpoint}): ${error.message}`, 'error');
+}
+
+// Retry function for failed API calls
+function retryApiCall(endpoint, containerId) {
+    log(`🔄 Retrying API call to ${endpoint}...`, 'info');
+    
+    switch (endpoint) {
+        case '/api/monitor/status':
+            loadStatus();
+            break;
+        case '/api/monitor/alerts':
+            loadAlerts();
+            break;
+        case '/api/monitor/config':
+            // Reload would be handled by loadStatus()
+            loadStatus();
+            break;
+        default:
+            log(`⚠️ Don't know how to retry ${endpoint}`, 'warning');
+    }
+}
 
 // Enhanced logging with different types and formatting
 function log(message, type = 'info', showTimestamp = true) {
@@ -399,7 +547,7 @@ function log(message, type = 'info', showTimestamp = true) {
 }
 
 function logBanner(message) {
-    log('=' .repeat(70), 'banner', false);
+    log('='.repeat(70), 'banner', false);
     log(message, 'banner', false);
     log('='.repeat(70), 'banner', false);
 }
@@ -474,11 +622,77 @@ function exportConsoleLog() {
 // Load monitor status on page load
 window.addEventListener('DOMContentLoaded', function() {
     log('🌐 Page loaded, initializing monitor interface...');
-    loadStatus();
+    
+    // Show loading state
+    showLoadingState();
+    
+    // Start loading data with better error handling
+    initializeMonitorPage();
     
     // Start polling for real-time updates when monitor is running
     setInterval(pollMonitorOutput, 2000);
 });
+
+function showLoadingState() {
+    const elements = {
+        'status-text': 'Loading status...',
+        'monitor-status': 'Loading...',
+        'last-check': 'Loading...',
+        'next-check': 'Loading...',
+        'total-alerts': '...',
+        'known-tokens': '...'
+    };
+    
+    Object.entries(elements).forEach(([id, text]) => {
+        const element = document.getElementById(id);
+        if (element) {
+            element.textContent = text;
+        }
+    });
+}
+
+async function initializeMonitorPage() {
+    log('🔧 Initializing monitor page...', 'info');
+    
+    try {
+        // Test basic connectivity first
+        await testBasicConnectivity();
+        
+        // Load all components
+        await Promise.allSettled([
+            loadStatus(),
+            loadAlerts()
+        ]);
+        
+        log('✅ Monitor page initialized successfully', 'success');
+        
+    } catch (error) {
+        log(`❌ Failed to initialize monitor page: ${error.message}`, 'error');
+        showApiError('initialization', error);
+    }
+}
+
+async function testBasicConnectivity() {
+    log('🔌 Testing basic server connectivity...', 'info');
+    
+    try {
+        // Test the simplest endpoint first
+        const response = await fetch('/api/status');
+        
+        if (!response.ok) {
+            throw new Error(`Server responded with ${response.status}: ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        log('✅ Server connectivity test passed', 'success');
+        
+        return data;
+        
+    } catch (error) {
+        log(`❌ Server connectivity test failed: ${error.message}`, 'error');
+        throw new Error(`Cannot connect to server: ${error.message}`);
+    }
+}
 
 function pollMonitorOutput() {
     if (isMonitorRunning) {
@@ -488,30 +702,38 @@ function pollMonitorOutput() {
     }
 }
 
-function loadStatus() {
-    fetch('/api/monitor/status')
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            updateUI(data);
-            
-            // Show stats
-            if (data.stats) {
-                document.getElementById('total-alerts').textContent = data.stats.total_alerts || 0;
-                document.getElementById('known-tokens').textContent = data.stats.known_tokens || 0;
-            }
-        })
-        .catch(error => {
-            log(`❌ Error loading status: ${error}`, 'error');
-            console.error('Full error:', error);
-        });
+async function loadStatus() {
+    try {
+        log('📡 Loading monitor status...', 'info');
+        const data = await makeApiCall('/api/monitor/status');
+        
+        updateUI(data);
+        
+        // Show stats
+        if (data.data && data.data.stats) {
+            document.getElementById('total-alerts').textContent = data.data.stats.total_alerts || 0;
+            document.getElementById('known-tokens').textContent = data.data.stats.known_tokens || 0;
+        } else if (data.stats) {
+            document.getElementById('total-alerts').textContent = data.stats.total_alerts || 0;
+            document.getElementById('known-tokens').textContent = data.stats.known_tokens || 0;
+        }
+        
+        log('✅ Monitor status loaded successfully', 'success');
+        
+    } catch (error) {
+        showApiError('/api/monitor/status', error);
+        
+        // Set default values when API fails
+        document.getElementById('status-text').textContent = 'Status unavailable';
+        document.getElementById('monitor-status').textContent = 'Unknown';
+        document.getElementById('monitor-status').className = 'badge bg-danger';
+    }
 }
 
-function updateUI(status) {
+function updateUI(response) {
+    // Handle both direct data and wrapped responses
+    const status = response.data || response;
+    
     const indicator = document.getElementById('status-indicator');
     const statusText = document.getElementById('status-text');
     const startBtn = document.getElementById('start-btn');
@@ -569,8 +791,10 @@ function updateUI(status) {
         document.getElementById('use-interval-timeframe').checked = status.config.use_interval_for_timeframe !== false;
         
         // Update network checkboxes
-        document.getElementById('network-eth').checked = status.config.networks && status.config.networks.includes('ethereum');
-        document.getElementById('network-base').checked = status.config.networks && status.config.networks.includes('base');
+        if (status.config.networks) {
+            document.getElementById('network-eth').checked = status.config.networks.includes('ethereum');
+            document.getElementById('network-base').checked = status.config.networks.includes('base');
+        }
     }
     
     // Update thresholds
@@ -579,28 +803,15 @@ function updateUI(status) {
         document.getElementById('min-eth').value = status.alert_thresholds.min_eth_total || 0.5;
         document.getElementById('min-score').value = status.alert_thresholds.min_alpha_score || 30;
     }
-    
-    // Load alerts
-    loadAlerts();
 }
 
-function startMonitor() {
+async function startMonitor() {
     logBanner('🚀 STARTING CRYPTO MONITOR');
     log('📡 Sending start request to server...', 'info');
     
-    fetch('/api/monitor/start', { 
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        }
-    })
-    .then(response => {
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        return response.json();
-    })
-    .then(data => {
+    try {
+        const data = await makeApiCall('/api/monitor/start', { method: 'POST' });
+        
         if (data.status === 'success') {
             log('✅ Monitor started successfully!', 'success');
             log('🔄 Monitor will now check for new tokens automatically', 'info');
@@ -609,63 +820,39 @@ function startMonitor() {
             log(`❌ Failed to start monitor: ${data.message}`, 'error');
         }
         loadStatus();
-    })
-    .catch(error => {
-        log(`❌ Error starting monitor: ${error}`, 'error');
-        console.error('Full error:', error);
-    });
+    } catch (error) {
+        log(`❌ Error starting monitor: ${error.message}`, 'error');
+    }
 }
 
-function stopMonitor() {
+async function stopMonitor() {
     logBanner('🛑 STOPPING CRYPTO MONITOR');
     log('📡 Sending stop request to server...', 'info');
     
-    fetch('/api/monitor/stop', { 
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        }
-    })
-    .then(response => {
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        return response.json();
-    })
-    .then(data => {
+    try {
+        const data = await makeApiCall('/api/monitor/stop', { method: 'POST' });
+        
         if (data.status === 'success') {
             log('✅ Monitor stopped successfully', 'success');
         } else {
             log(`❌ Failed to stop monitor: ${data.message}`, 'error');
         }
         loadStatus();
-    })
-    .catch(error => {
-        log(`❌ Error stopping monitor: ${error}`, 'error');
-        console.error('Full error:', error);
-    });
+    } catch (error) {
+        log(`❌ Error stopping monitor: ${error.message}`, 'error');
+    }
 }
 
-function checkNow() {
+async function checkNow() {
     logBanner('🔍 IMMEDIATE CHECK INITIATED');
     log('🚀 Starting immediate token analysis...', 'warning');
     log('📊 This will analyze recent wallet activity for new tokens', 'info');
     log('⏳ Please wait... Check will run in background', 'info');
     log('💡 Detailed progress will appear in server console', 'info');
     
-    fetch('/api/monitor/check-now', { 
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        }
-    })
-    .then(response => {
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        return response.json();
-    })
-    .then(data => {
+    try {
+        const data = await makeApiCall('/api/monitor/check-now', { method: 'POST' });
+        
         if (data.status === 'success') {
             log('✅ Immediate check initiated successfully!', 'success');
             log('🔍 Analysis running... Results will appear shortly', 'info');
@@ -682,47 +869,38 @@ function checkNow() {
         } else {
             log(`❌ Check failed: ${data.message}`, 'error');
         }
-    })
-    .catch(error => {
-        log(`❌ Error running immediate check: ${error}`, 'error');
-        console.error('Full error:', error);
-    });
+    } catch (error) {
+        log(`❌ Error running immediate check: ${error.message}`, 'error');
+    }
 }
 
-function testConnection() {
+async function testConnection() {
     log('🔌 Testing monitor connections...', 'info');
     log('📡 Checking API endpoints and database connectivity', 'info');
     
-    fetch('/api/monitor/test')
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
+    try {
+        const data = await makeApiCall('/api/monitor/test');
+        
+        if (data.status === 'success') {
+            log('✅ Connection test passed!', 'success');
+            log(`📊 Test results: ${JSON.stringify(data.results)}`, 'info');
+            
+            // Display individual test results
+            if (data.results) {
+                Object.entries(data.results).forEach(([test, result]) => {
+                    const status = result ? '✅' : '❌';
+                    log(`  ${status} ${test}: ${result ? 'OK' : 'FAILED'}`, result ? 'success' : 'error');
+                });
             }
-            return response.json();
-        })
-        .then(data => {
-            if (data.status === 'success') {
-                log('✅ Connection test passed!', 'success');
-                log(`📊 Test results: ${JSON.stringify(data.results)}`, 'info');
-                
-                // Display individual test results
-                if (data.results) {
-                    Object.entries(data.results).forEach(([test, result]) => {
-                        const status = result ? '✅' : '❌';
-                        log(`  ${status} ${test}: ${result ? 'OK' : 'FAILED'}`, result ? 'success' : 'error');
-                    });
-                }
-            } else {
-                log(`❌ Connection test failed: ${data.message}`, 'error');
-            }
-        })
-        .catch(error => {
-            log(`❌ Connection test error: ${error}`, 'error');
-            console.error('Full error:', error);
-        });
+        } else {
+            log(`❌ Connection test failed: ${data.message}`, 'error');
+        }
+    } catch (error) {
+        log(`❌ Connection test error: ${error.message}`, 'error');
+    }
 }
 
-function updateConfig() {
+async function updateConfig() {
     const networks = [];
     if (document.getElementById('network-eth').checked) networks.push('ethereum');
     if (document.getElementById('network-base').checked) networks.push('base');
@@ -737,26 +915,24 @@ function updateConfig() {
     log(`⚙️ Updating configuration...`, 'info');
     log(`📊 New settings: ${networks.join(', ')} networks, ${config.num_wallets} wallets, ${config.check_interval_minutes}min interval`, 'info');
     
-    fetch('/api/monitor/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config)
-    })
-    .then(response => response.json())
-    .then(data => {
+    try {
+        const data = await makeApiCall('/api/monitor/config', {
+            method: 'POST',
+            body: JSON.stringify(config)
+        });
+        
         if (data.status === 'success') {
             log('✅ Configuration updated successfully', 'success');
             loadStatus();
         } else {
             log(`❌ Config update failed: ${data.message}`, 'error');
         }
-    })
-    .catch(error => {
-        log(`❌ Error updating config: ${error}`, 'error');
-    });
+    } catch (error) {
+        log(`❌ Error updating config: ${error.message}`, 'error');
+    }
 }
 
-function updateThresholds() {
+async function updateThresholds() {
     const thresholds = {
         min_wallets: parseInt(document.getElementById('min-wallets').value),
         min_eth_total: parseFloat(document.getElementById('min-eth').value),
@@ -766,91 +942,91 @@ function updateThresholds() {
     log(`🎯 Updating alert thresholds...`, 'info');
     log(`📊 New thresholds: ${thresholds.min_wallets} wallets, ${thresholds.min_eth_total} ETH, α≥${thresholds.min_alpha_score}`, 'info');
     
-    fetch('/api/monitor/thresholds', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(thresholds)
-    })
-    .then(response => response.json())
-    .then(data => {
+    try {
+        const data = await makeApiCall('/api/monitor/thresholds', {
+            method: 'POST',
+            body: JSON.stringify(thresholds)
+        });
+        
         if (data.status === 'success') {
             log('✅ Alert thresholds updated successfully', 'success');
         } else {
             log(`❌ Threshold update failed: ${data.message}`, 'error');
         }
-    })
-    .catch(error => {
-        log(`❌ Error updating thresholds: ${error}`, 'error');
-    });
+    } catch (error) {
+        log(`❌ Error updating thresholds: ${error.message}`, 'error');
+    }
 }
 
-function loadAlerts() {
-    fetch('/api/monitor/alerts?limit=20')
-        .then(response => response.json())
-        .then(alerts => {
-            const container = document.getElementById('alerts-container');
+async function loadAlerts() {
+    try {
+        log('📋 Loading recent alerts...', 'info');
+        const alerts = await makeApiCall('/api/monitor/alerts?limit=20');
+        
+        const container = document.getElementById('alerts-container');
+        
+        if (!alerts || alerts.length === 0) {
+            container.innerHTML = '<p class="text-muted">No alerts yet. Start monitoring or run an immediate check to generate alerts.</p>';
+        } else {
+            log(`📋 Loading ${alerts.length} recent alerts`, 'info');
             
-            if (alerts.length === 0) {
-                container.innerHTML = '<p class="text-muted">No alerts yet. Start monitoring or run an immediate check to generate alerts.</p>';
-            } else {
-                log(`📋 Loading ${alerts.length} recent alerts`, 'info');
+            let html = '';
+            alerts.reverse().forEach(alert => {  // Show newest first
+                const alertClass = getAlertClass(alert);
+                const alertEmoji = getAlertEmoji(alert);
+                const confidenceBadge = getConfidenceBadge(alert);
+                const networkBadge = alert.network ? `<span class="badge bg-info ms-2">${alert.network.toUpperCase()}</span>` : '';
                 
-                let html = '';
-                alerts.reverse().forEach(alert => {  // Show newest first
-                    const alertClass = getAlertClass(alert);
-                    const alertEmoji = getAlertEmoji(alert);
-                    const confidenceBadge = getConfidenceBadge(alert);
-                    const networkBadge = alert.network ? `<span class="badge bg-info ms-2">${alert.network.toUpperCase()}</span>` : '';
-                    
-                    html += `
-                        <div class="alert-item ${alertClass}">
-                            <div class="alert-token">
-                                ${alertEmoji} ${alert.token} ${networkBadge} ${confidenceBadge}
+                html += `
+                    <div class="alert-item ${alertClass}">
+                        <div class="alert-token">
+                            ${alertEmoji} ${alert.token} ${networkBadge} ${confidenceBadge}
+                        </div>
+                        <div class="row g-2 mb-2">
+                            <div class="col-md-3">
+                                <small class="text-muted">ETH Spent:</small>
+                                <div class="fw-bold text-success">${(alert.data?.total_eth_spent || 0).toFixed(3)} ETH</div>
                             </div>
-                            <div class="row g-2 mb-2">
-                                <div class="col-md-3">
-                                    <small class="text-muted">ETH Spent:</small>
-                                    <div class="fw-bold text-success">${(alert.data?.total_eth_spent || 0).toFixed(3)} ETH</div>
-                                </div>
-                                <div class="col-md-3">
-                                    <small class="text-muted">Wallets:</small>
-                                    <div class="fw-bold text-info">${alert.data?.wallet_count || 0}</div>
-                                </div>
-                                <div class="col-md-3">
-                                    <small class="text-muted">Score:</small>
-                                    <div class="fw-bold text-warning">${(alert.data?.alpha_score || alert.data?.sell_score || 0).toFixed(0)}</div>
-                                </div>
-                                <div class="col-md-3">
-                                    <small class="text-muted">Activity:</small>
-                                    <div class="small">${alert.data?.total_purchases || alert.data?.total_sells || 0} transactions</div>
-                                </div>
+                            <div class="col-md-3">
+                                <small class="text-muted">Wallets:</small>
+                                <div class="fw-bold text-info">${alert.data?.wallet_count || 0}</div>
                             </div>
-                            <div class="row g-2 mb-2">
-                                <div class="col-md-6">
-                                    <small class="text-muted">Platforms/Methods:</small>
-                                    <div class="small">${(alert.data?.platforms || alert.data?.methods || []).slice(0, 3).join(', ') || 'Unknown'}</div>
-                                </div>
-                                <div class="col-md-6">
-                                    <small class="text-muted">Alert Type:</small>
-                                    <div class="small text-capitalize">${alert.alert_type?.replace('_', ' ') || 'Unknown'}</div>
-                                </div>
+                            <div class="col-md-3">
+                                <small class="text-muted">Score:</small>
+                                <div class="fw-bold text-warning">${(alert.data?.alpha_score || alert.data?.sell_score || 0).toFixed(0)}</div>
                             </div>
-                            <div class="mt-2">
-                                <small class="text-muted">
-                                    🕐 ${new Date(alert.timestamp).toLocaleString()}
-                                </small>
+                            <div class="col-md-3">
+                                <small class="text-muted">Activity:</small>
+                                <div class="small">${alert.data?.total_purchases || alert.data?.total_sells || 0} transactions</div>
                             </div>
                         </div>
-                    `;
-                });
-                
-                container.innerHTML = html;
-            }
-        })
-        .catch(error => {
-            log(`❌ Error loading alerts: ${error}`, 'error');
-            console.error('Full error:', error);
-        });
+                        <div class="row g-2 mb-2">
+                            <div class="col-md-6">
+                                <small class="text-muted">Platforms/Methods:</small>
+                                <div class="small">${(alert.data?.platforms || alert.data?.methods || []).slice(0, 3).join(', ') || 'Unknown'}</div>
+                            </div>
+                            <div class="col-md-6">
+                                <small class="text-muted">Alert Type:</small>
+                                <div class="small text-capitalize">${alert.alert_type?.replace('_', ' ') || 'Unknown'}</div>
+                            </div>
+                        </div>
+                        <div class="mt-2">
+                            <small class="text-muted">
+                                🕐 ${new Date(alert.timestamp).toLocaleString()}
+                            </small>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            container.innerHTML = html;
+        }
+        
+        log('✅ Alerts loaded successfully', 'success');
+        
+    } catch (error) {
+        showApiError('/api/monitor/alerts', error, 'alerts-container');
+    }
 }
 
 function getAlertClass(alert) {
@@ -937,31 +1113,30 @@ function startCountdown(nextCheckTime) {
 }
 
 // Enhanced status updates with more detailed logging
-function enhancedStatusUpdate() {
-    fetch('/api/monitor/status')
-        .then(response => response.json())
-        .then(data => {
-            updateUI(data);
-            
-            // Start countdown if monitor is running and we have next check time
-            if (data.is_running && data.next_check) {
-                startCountdown(data.next_check);
+async function enhancedStatusUpdate() {
+    try {
+        const data = await makeApiCall('/api/monitor/status');
+        updateUI(data);
+        
+        // Start countdown if monitor is running and we have next check time
+        const status = data.data || data;
+        if (status.is_running && status.next_check) {
+            startCountdown(status.next_check);
+        }
+        
+        // Log interesting changes
+        if (status.stats && status.stats.total_alerts > 0) {
+            const newAlerts = status.stats.total_alerts - (window.lastAlertCount || 0);
+            if (newAlerts > 0) {
+                logAlert(`${newAlerts} new alert(s) detected!`);
+                window.lastAlertCount = status.stats.total_alerts;
             }
-            
-            // Log interesting changes
-            if (data.stats && data.stats.total_alerts > 0) {
-                const newAlerts = data.stats.total_alerts - (window.lastAlertCount || 0);
-                if (newAlerts > 0) {
-                    logAlert(`${newAlerts} new alert(s) detected!`);
-                    window.lastAlertCount = data.stats.total_alerts;
-                }
-            }
-        })
-        .catch(error => {
-            if (error.message.includes('fetch')) {
-                log('⚠️ Connection to monitor lost, retrying...', 'warning');
-            }
-        });
+        }
+    } catch (error) {
+        if (error.message.includes('fetch')) {
+            log('⚠️ Connection to monitor lost, retrying...', 'warning');
+        }
+    }
 }
 
 // Replace the simple setInterval with enhanced updates
@@ -1004,5 +1179,40 @@ setTimeout(() => {
         log('  • Console output can be paused and exported', 'info');
     }
 }, 3000);
+
+// Add a diagnostic function for debugging
+window.debugMonitorPage = function() {
+    console.log('=== Monitor Page Debug Info ===');
+    console.log('API calls in progress:', apiCallsInProgress.size);
+    console.log('Monitor running:', isMonitorRunning);
+    console.log('Auto scroll:', autoScroll);
+    console.log('Console paused:', consolePaused);
+    console.log('Buffer size:', consoleBuffer.length);
+    
+    // Test all monitor endpoints
+    const endpoints = [
+        '/api/monitor/status',
+        '/api/monitor/config',
+        '/api/monitor/alerts',
+        '/api/monitor/test'
+    ];
+    
+    console.log('Testing monitor endpoints...');
+    endpoints.forEach(async (endpoint) => {
+        try {
+            const response = await fetch(endpoint);
+            console.log(`${endpoint}: ${response.status} ${response.statusText}`);
+            if (!response.ok) {
+                const text = await response.text();
+                console.log(`  Error response:`, text.substring(0, 200));
+            }
+        } catch (error) {
+            console.error(`${endpoint}: ERROR -`, error.message);
+        }
+    });
+};
+
+// Expose debug function to console
+console.log('💡 Debug function available: debugMonitorPage()');
 </script>
 {% endblock %}

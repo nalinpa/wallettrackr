@@ -1,6 +1,3 @@
-"""
-JSON utilities using orjson for improved performance
-"""
 import orjson
 import json
 from typing import Any, Dict, List, Optional, Union
