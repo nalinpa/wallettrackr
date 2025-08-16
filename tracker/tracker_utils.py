@@ -1,4 +1,3 @@
-import requests
 import pymongo
 from datetime import datetime, timedelta
 import time
