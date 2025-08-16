@@ -600,3 +600,35 @@ def test_web3_setup():
     except Exception as e:
         print(f"❌ Web3 test failed: {e}")
         return False
+
+
+# Add this to the top of tracker/tracker_utils.py after existing imports:
+
+# Quick optimization imports
+try:
+    from utils.optimized_http import get_optimized_client
+    from utils.fast_json import fast_dumps, fast_loads
+    OPTIMIZED_AVAILABLE = True
+    print("Quick optimizations loaded")
+except ImportError:
+    OPTIMIZED_AVAILABLE = False
+    print("Quick optimizations not available")
+
+# Patch the EnhancedBaseTracker class
+if OPTIMIZED_AVAILABLE:
+    # Replace the make_alchemy_request method
+    def optimized_make_alchemy_request(self, method: str, params: List) -> Dict:
+        """Optimized Alchemy request with httpx + orjson"""
+        payload = {
+            "id": 1,
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params
+        }
+        
+        client = get_optimized_client()
+        return client.make_request(self.alchemy_url, payload)
+    
+    # Monkey patch the method
+    EnhancedBaseTracker.make_alchemy_request = optimized_make_alchemy_request
+    print("Tracker optimized with httpx + orjson")

@@ -8,6 +8,7 @@ import threading
 import sys
 from io import StringIO
 import logging
+from typing import Dict
 
 # Import settings
 from config.settings import settings, analysis_config, monitor_config, alchemy_config
@@ -1805,3 +1806,74 @@ def handle_exception(error):
         'error': str(error),
         'orjson_enabled': ORJSON_AVAILABLE
     }), 500
+
+
+# Add this to api_routes.py after existing imports:
+
+# Quick JSON optimization
+try:
+    from utils.fast_json import fast_dumps, fast_loads, benchmark_json_speed
+    from flask import Response
+    
+    def create_fast_response(data: Dict, status_code: int = 200) -> Response:
+        """Create optimized JSON response"""
+        json_str = fast_dumps(data)
+        
+        response = Response(
+            json_str,
+            status=status_code,
+            mimetype='application/json'
+        )
+        
+        # Add performance header
+        response.headers['X-JSON-Engine'] = 'orjson-optimized'
+        
+        return response
+    
+    # Replace jsonify usage:
+    # OLD: return jsonify(data)
+    # NEW: return create_fast_response(data)
+    
+    print("API routes ready for JSON optimization")
+    
+except ImportError:
+    def create_fast_response(data, status_code=200):
+        from flask import jsonify
+        return jsonify(data), status_code
+    print("Using fallback JSON handling")
+
+# Quick performance test endpoint
+@api_bp.route('/api/test/json-speed')
+def test_json_speed():
+    """Test JSON serialization speed"""
+    test_data = {
+        'tokens': [{'name': f'TOKEN_{i}', 'score': i * 10} for i in range(100)],
+        'timestamp': datetime.now().isoformat(),
+        'network': 'test',
+        'large_list': list(range(1000))
+    }
+    
+    benchmark = benchmark_json_speed(test_data, iterations=50)
+    
+    return create_fast_response({
+        'test_completed': True,
+        'benchmark_results': benchmark,
+        'recommendation': f"orjson is {benchmark['speedup']:.1f}x faster" if benchmark['speedup'] > 1 else "Consider upgrading"
+    })
+    
+@api_bp.route('/uvloop/status')
+def uvloop_status():
+    """Check uvloop status and performance"""
+    from utils.uvloop_monitor import uvloop_monitor
+    
+    stats = uvloop_monitor.get_performance_stats()
+    
+    return create_optimized_response({
+        'uvloop_status': stats,
+        'recommendations': [
+            'uvloop active - optimal performance' if stats['uvloop_enabled'] 
+            else 'Run in Docker/Linux for uvloop benefits',
+            'Monitor request times for performance insights',
+            'Use async batch operations for maximum uvloop benefit'
+        ]
+    })
