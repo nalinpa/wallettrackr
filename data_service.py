@@ -8,61 +8,108 @@ from collections import defaultdict
 # Import settings
 from config.settings import settings, analysis_config, monitor_config
 
+# Enhanced imports with orjson support
+try:
+    from utils.json_utils import orjson_dumps_str, orjson_loads, sanitize_for_orjson, benchmark_json_performance
+    ORJSON_AVAILABLE = True
+    print("✅ orjson integration enabled in data_service")
+except ImportError as e:
+    print(f"⚠️  orjson not available in data_service: {e}")
+    ORJSON_AVAILABLE = False
+    # Fallback functions
+    def orjson_dumps_str(obj, **kwargs):
+        return json.dumps(obj, default=str)
+    def orjson_loads(data):
+        return json.loads(data)
+    def sanitize_for_orjson(obj):
+        return obj
+    def benchmark_json_performance(data, iterations=100):
+        return {"serialize_speedup": 1.0, "roundtrip_speedup": 1.0}
+
 # Configure logger
 logger = logging.getLogger(__name__)
 
 class AnalysisService:
-    """Service for data processing and caching with settings integration"""
+    """Service for data processing and caching with orjson optimization"""
     
     def __init__(self):
         self.cache = {
-            'eth_buy': None,
-            'eth_sell': None,
+            'ethereum_buy': None,    # Fixed: was 'eth_buy'
+            'ethereum_sell': None,   # Fixed: was 'eth_sell'
             'base_buy': None,
             'base_sell': None,
             'last_updated': None,
             'cache_metadata': {}
         }
         
-        # Cache configuration from settings
+        # Enhanced cache configuration with orjson support
         self.cache_config = {
             'max_age_hours': 24,  # How long to keep cached data
             'auto_cleanup': True,
-            'persist_to_file': False,  # Could be configurable
-            'cache_file': 'cache/analysis_cache.json'
+            'persist_to_file': True,  # Enable file persistence with orjson
+            'cache_file': 'cache/analysis_cache.json',
+            'use_orjson': ORJSON_AVAILABLE,  # Flag to enable orjson
+            'benchmark_performance': True  # Set to True to log performance metrics
         }
         
         logger.info(f"AnalysisService initialized for {settings.environment} environment")
         logger.info(f"Supported networks: {[net.value for net in settings.monitor.supported_networks]}")
+        logger.info(f"orjson optimization: {'✅ enabled' if ORJSON_AVAILABLE else '❌ disabled'}")
+        
+        # Load existing cache if available
+        if self.cache_config['persist_to_file']:
+            self.load_cache_from_file()
     
     def cache_data(self, key: str, data: Dict) -> None:
-        """Cache analysis results with metadata"""
+        """Enhanced cache with orjson performance"""
         # Validate key against supported networks
         valid_keys = self._get_valid_cache_keys()
         if key not in valid_keys:
             logger.warning(f"Invalid cache key: {key}. Valid keys: {valid_keys}")
             return
         
-        # Add metadata
+        # Sanitize data for orjson
+        if ORJSON_AVAILABLE:
+            sanitized_data = sanitize_for_orjson(data)
+        else:
+            sanitized_data = data
+        
+        # Add metadata with performance info
         cache_entry = {
-            'data': data,
+            'data': sanitized_data,
             'timestamp': datetime.now().isoformat(),
             'environment': settings.environment,
-            'config_hash': self._get_config_hash()
+            'config_hash': self._get_config_hash(),
+            'serialization_method': 'orjson' if self.cache_config['use_orjson'] else 'json',
+            'orjson_available': ORJSON_AVAILABLE
         }
+        
+        # Benchmark performance if enabled
+        if self.cache_config['benchmark_performance'] and ORJSON_AVAILABLE:
+            try:
+                perf_metrics = benchmark_json_performance(sanitized_data, iterations=50)
+                logger.info(f"📊 Cache performance for {key}: orjson {perf_metrics['serialize_speedup']:.1f}x faster")
+                cache_entry['performance_metrics'] = {
+                    'serialize_speedup': round(perf_metrics['serialize_speedup'], 1),
+                    'cache_size_bytes': len(str(sanitized_data)),
+                    'benchmark_iterations': 50
+                }
+            except Exception as e:
+                logger.debug(f"Performance benchmarking failed: {e}")
         
         self.cache[key] = cache_entry
         self.cache['last_updated'] = datetime.now().isoformat()
         
         # Update metadata
         self.cache['cache_metadata'][key] = {
-            'size_estimate': len(str(data)),
+            'size_estimate': len(str(sanitized_data)),
             'token_count': data.get('unique_tokens', 0),
             'network': self._extract_network_from_key(key),
-            'analysis_type': self._extract_analysis_type_from_key(key)
+            'analysis_type': self._extract_analysis_type_from_key(key),
+            'orjson_optimized': ORJSON_AVAILABLE
         }
         
-        logger.info(f"Cached data for {key}: {data.get('unique_tokens', 0)} tokens")
+        logger.info(f"✅ Cached data for {key}: {data.get('unique_tokens', 0)} tokens (orjson: {'✅' if ORJSON_AVAILABLE else '❌'})")
         
         # Auto-cleanup if enabled
         if self.cache_config['auto_cleanup']:
@@ -73,7 +120,7 @@ class AnalysisService:
             self._persist_cache_to_file()
     
     def get_cached_data(self, key: str) -> Optional[Dict]:
-        """Get cached data by key with validation"""
+        """Enhanced get cached data with orjson validation"""
         cache_entry = self.cache.get(key)
         
         if not cache_entry:
@@ -95,10 +142,15 @@ class AnalysisService:
             logger.info(f"Configuration changed since {key} was cached, data may be stale")
             # Could optionally invalidate here
         
+        # Log cache hit with performance info
+        if ORJSON_AVAILABLE and cache_entry.get('performance_metrics'):
+            perf = cache_entry['performance_metrics']
+            logger.debug(f"📊 Cache hit for {key}: {perf.get('serialize_speedup', 0)}x faster with orjson")
+        
         return cache_entry['data']
     
     def get_cache_status(self) -> Dict[str, Any]:
-        """Get detailed status of all cached data"""
+        """Enhanced status with orjson information"""
         status = {}
         valid_keys = self._get_valid_cache_keys()
         
@@ -117,7 +169,8 @@ class AnalysisService:
                 status[key] = {
                     'available': True,
                     'status': 'legacy_format',
-                    'timestamp': 'unknown'
+                    'timestamp': 'unknown',
+                    'orjson_optimized': False
                 }
                 continue
             
@@ -131,26 +184,216 @@ class AnalysisService:
                 'timestamp': cache_entry.get('timestamp'),
                 'environment': cache_entry.get('environment'),
                 'config_changed': config_changed,
+                'serialization_method': cache_entry.get('serialization_method', 'json'),
+                'orjson_optimized': cache_entry.get('orjson_available', False),
                 'metadata': self.cache['cache_metadata'].get(key, {})
             }
+            
+            # Add performance metrics if available
+            if cache_entry.get('performance_metrics'):
+                status[key]['performance_metrics'] = cache_entry['performance_metrics']
         
-        # Add overall cache info
+        # Add overall cache info with orjson status
         status['_cache_info'] = {
             'last_updated': self.cache['last_updated'],
             'supported_networks': [net.value for net in settings.monitor.supported_networks],
             'environment': settings.environment,
             'auto_cleanup': self.cache_config['auto_cleanup'],
-            'max_age_hours': self.cache_config['max_age_hours']
+            'max_age_hours': self.cache_config['max_age_hours'],
+            'orjson_available': ORJSON_AVAILABLE,
+            'orjson_enabled': self.cache_config['use_orjson'],
+            'performance_benchmarking': self.cache_config['benchmark_performance']
         }
         
         return status
     
-    def get_last_updated(self) -> Optional[str]:
-        """Get last update timestamp"""
-        return self.cache['last_updated']
+    def _persist_cache_to_file(self) -> None:
+        """Enhanced cache persistence using orjson"""
+        try:
+            os.makedirs(os.path.dirname(self.cache_config['cache_file']), exist_ok=True)
+            
+            # Prepare cache data for serialization
+            cache_data = {
+                'timestamp': datetime.now().isoformat(),
+                'environment': settings.environment,
+                'serialization_method': 'orjson' if self.cache_config['use_orjson'] else 'json',
+                'orjson_available': ORJSON_AVAILABLE,
+                'cache': {}
+            }
+            
+            for key, value in self.cache.items():
+                if value is not None and key != 'cache_metadata':
+                    cache_data['cache'][key] = value
+            
+            # Use orjson for file persistence if available
+            if self.cache_config['use_orjson'] and ORJSON_AVAILABLE:
+                start_time = datetime.now()
+                json_str = orjson_dumps_str(cache_data)
+                persist_time = (datetime.now() - start_time).total_seconds() * 1000
+                
+                with open(self.cache_config['cache_file'], 'w', encoding='utf-8') as f:
+                    f.write(json_str)
+                
+                logger.debug(f"📊 Cache persisted with orjson in {persist_time:.1f}ms to {self.cache_config['cache_file']}")
+            else:
+                # Fallback to standard json
+                with open(self.cache_config['cache_file'], 'w') as f:
+                    json.dump(cache_data, f, indent=2, default=str)
+                
+                logger.debug(f"Cache persisted with standard JSON to {self.cache_config['cache_file']}")
+                
+        except Exception as e:
+            logger.error(f"Failed to persist cache: {e}")
+    
+    def load_cache_from_file(self) -> bool:
+        """Load cache from file using orjson if available"""
+        try:
+            if not os.path.exists(self.cache_config['cache_file']):
+                logger.debug(f"No cache file found at {self.cache_config['cache_file']}")
+                return False
+            
+            start_time = datetime.now()
+            
+            with open(self.cache_config['cache_file'], 'r', encoding='utf-8') as f:
+                if ORJSON_AVAILABLE:
+                    cache_data = orjson_loads(f.read())
+                    load_method = 'orjson'
+                else:
+                    cache_data = json.load(f)
+                    load_method = 'json'
+            
+            load_time = (datetime.now() - start_time).total_seconds() * 1000
+            
+            # Validate and load cache data
+            if isinstance(cache_data, dict) and 'cache' in cache_data:
+                loaded_count = 0
+                for key, value in cache_data['cache'].items():
+                    if key not in ['last_updated', 'cache_metadata']:
+                        self.cache[key] = value
+                        loaded_count += 1
+                
+                self.cache['last_updated'] = cache_data.get('timestamp')
+                
+                logger.info(f"✅ Cache loaded with {load_method} in {load_time:.1f}ms: {loaded_count} entries")
+                
+                # Check if cache was created with orjson
+                if cache_data.get('orjson_available') and not ORJSON_AVAILABLE:
+                    logger.warning("⚠️  Cache was created with orjson but orjson is not currently available")
+                elif not cache_data.get('orjson_available') and ORJSON_AVAILABLE:
+                    logger.info("📊 Cache will be upgraded to orjson on next write")
+                
+                return True
+            
+        except Exception as e:
+            logger.error(f"Failed to load cache from file: {e}")
+        
+        return False
+    
+    def clear_cache(self, networks: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Clear cached data with optional network filtering and performance info"""
+        cleared_entries = []
+        performance_summary = {}
+        
+        if networks:
+            # Clear specific networks
+            for network in networks:
+                for analysis_type in ['buy', 'sell']:
+                    # Handle both old and new key formats
+                    if network == 'eth':
+                        key = f"ethereum_{analysis_type}"
+                    else:
+                        key = f"{network}_{analysis_type}"
+                    
+                    if key in self.cache and self.cache[key]:
+                        # Capture performance data before clearing
+                        cache_entry = self.cache[key]
+                        if isinstance(cache_entry, dict) and cache_entry.get('performance_metrics'):
+                            performance_summary[key] = cache_entry['performance_metrics']
+                        
+                        self.cache[key] = None
+                        cleared_entries.append(key)
+                        
+                        if key in self.cache['cache_metadata']:
+                            del self.cache['cache_metadata'][key]
+            
+            logger.info(f"Cleared cache for networks: {networks}")
+        else:
+            # Clear all
+            valid_keys = self._get_valid_cache_keys()
+            for key in valid_keys:
+                if self.cache.get(key):
+                    # Capture performance data before clearing
+                    cache_entry = self.cache[key]
+                    if isinstance(cache_entry, dict) and cache_entry.get('performance_metrics'):
+                        performance_summary[key] = cache_entry['performance_metrics']
+                    
+                    self.cache[key] = None
+                    cleared_entries.append(key)
+            
+            self.cache['cache_metadata'] = {}
+            self.cache['last_updated'] = None
+            
+            logger.info("Cleared all cached data")
+        
+        return {
+            'status': 'success',
+            'cleared_keys': cleared_entries,
+            'performance_summary': performance_summary,
+            'orjson_enabled': ORJSON_AVAILABLE
+        }
+    
+    def get_performance_summary(self) -> Dict[str, Any]:
+        """Get performance summary for all cached data"""
+        summary = {
+            'orjson_available': ORJSON_AVAILABLE,
+            'total_cached_entries': 0,
+            'total_cache_size_bytes': 0,
+            'average_speedup': 0,
+            'cache_entries': {}
+        }
+        
+        speedups = []
+        
+        for key in self._get_valid_cache_keys():
+            cache_entry = self.cache.get(key)
+            if cache_entry and isinstance(cache_entry, dict):
+                metadata = self.cache['cache_metadata'].get(key, {})
+                perf_metrics = cache_entry.get('performance_metrics', {})
+                
+                entry_summary = {
+                    'available': True,
+                    'size_bytes': metadata.get('size_estimate', 0),
+                    'token_count': metadata.get('token_count', 0),
+                    'orjson_optimized': metadata.get('orjson_optimized', False)
+                }
+                
+                if perf_metrics:
+                    entry_summary['performance'] = perf_metrics
+                    speedup = perf_metrics.get('serialize_speedup', 1.0)
+                    speedups.append(speedup)
+                
+                summary['cache_entries'][key] = entry_summary
+                summary['total_cached_entries'] += 1
+                summary['total_cache_size_bytes'] += metadata.get('size_estimate', 0)
+        
+        if speedups:
+            summary['average_speedup'] = round(sum(speedups) / len(speedups), 1)
+        
+        return summary
+    
+    def _get_valid_cache_keys(self) -> List[str]:
+        """Get valid cache keys based on supported networks"""
+        keys = []
+        for network in settings.monitor.supported_networks:
+            network_name = network.value
+            # Map eth to ethereum for consistency
+            if network_name == 'eth':
+                network_name = 'ethereum'
+            keys.extend([f'{network_name}_buy', f'{network_name}_sell'])
+        return keys
     
     def format_buy_response(self, results: Dict, network: str) -> Dict:
-        """Format buy analysis results for API response with settings integration"""
+        """Enhanced format buy analysis results with orjson optimization info"""
         # Validate network against settings
         supported_networks = [net.value for net in settings.monitor.supported_networks]
         if network not in supported_networks:
@@ -170,7 +413,8 @@ class AnalysisService:
             "config_info": {
                 "excluded_tokens_count": len(analysis_config.excluded_tokens),
                 "min_eth_value": self._get_network_min_eth_value(network),
-                "environment": settings.environment
+                "environment": settings.environment,
+                "orjson_optimized": ORJSON_AVAILABLE  # Add orjson status
             }
         }
         
@@ -193,7 +437,7 @@ class AnalysisService:
         return response_data
     
     def format_sell_response(self, results: Dict, network: str) -> Dict:
-        """Format sell analysis results for API response with settings integration"""
+        """Enhanced format sell analysis results with orjson optimization info"""
         # Validate network against settings
         supported_networks = [net.value for net in settings.monitor.supported_networks]
         if network not in supported_networks:
@@ -212,7 +456,8 @@ class AnalysisService:
             "config_info": {
                 "excluded_tokens_count": len(analysis_config.excluded_tokens),
                 "min_eth_value": self._get_network_min_eth_value(network),
-                "environment": settings.environment
+                "environment": settings.environment,
+                "orjson_optimized": ORJSON_AVAILABLE  # Add orjson status
             }
         }
         
@@ -233,6 +478,11 @@ class AnalysisService:
         }
         
         return response_data
+    
+    # All your existing methods remain the same, just add this at the end:
+    def get_last_updated(self) -> Optional[str]:
+        """Get last update timestamp"""
+        return self.cache['last_updated']
     
     def _filter_excluded_tokens(self, ranked_tokens: List) -> List:
         """Filter out excluded tokens based on settings"""
@@ -343,13 +593,6 @@ class AnalysisService:
             return 0.0
         return round(sum(wallet_scores) / len(wallet_scores), 1)
     
-    def _get_valid_cache_keys(self) -> List[str]:
-        """Get valid cache keys based on supported networks"""
-        keys = []
-        for network in settings.monitor.supported_networks:
-            keys.extend([f'{network.value}_buy', f'{network.value}_sell'])
-        return keys
-    
     def _extract_network_from_key(self, key: str) -> str:
         """Extract network name from cache key"""
         return key.split('_')[0] if '_' in key else 'unknown'
@@ -373,7 +616,8 @@ class AnalysisService:
             'excluded_tokens': sorted(analysis_config.excluded_tokens),
             'min_eth_value': analysis_config.min_eth_value,
             'min_eth_value_base': analysis_config.min_eth_value_base,
-            'alert_thresholds': monitor_config.alert_thresholds
+            'alert_thresholds': monitor_config.alert_thresholds,
+            'orjson_available': ORJSON_AVAILABLE
         }
         return str(hash(str(sorted(config_data.items()))))
     
@@ -414,60 +658,8 @@ class AnalysisService:
             if key in self.cache['cache_metadata']:
                 del self.cache['cache_metadata'][key]
     
-    def _persist_cache_to_file(self) -> None:
-        """Save cache to file (if enabled)"""
-        try:
-            os.makedirs(os.path.dirname(self.cache_config['cache_file']), exist_ok=True)
-            
-            # Prepare cache data for JSON serialization
-            cache_data = {
-                'timestamp': datetime.now().isoformat(),
-                'environment': settings.environment,
-                'cache': {}
-            }
-            
-            for key, value in self.cache.items():
-                if value is not None and key != 'cache_metadata':
-                    cache_data['cache'][key] = value
-            
-            with open(self.cache_config['cache_file'], 'w') as f:
-                json.dump(cache_data, f, indent=2)
-                
-            logger.debug(f"Cache persisted to {self.cache_config['cache_file']}")
-            
-        except Exception as e:
-            logger.error(f"Failed to persist cache: {e}")
-    
-    def clear_cache(self, networks: Optional[List[str]] = None) -> Dict[str, Any]:
-        """Clear cached data with optional network filtering"""
-        if networks:
-            # Clear specific networks
-            cleared_keys = []
-            for network in networks:
-                for analysis_type in ['buy', 'sell']:
-                    key = f"{network}_{analysis_type}"
-                    if key in self.cache:
-                        self.cache[key] = None
-                        cleared_keys.append(key)
-                        if key in self.cache['cache_metadata']:
-                            del self.cache['cache_metadata'][key]
-            
-            logger.info(f"Cleared cache for networks: {networks}")
-            return {'status': 'success', 'cleared_keys': cleared_keys}
-        else:
-            # Clear all
-            valid_keys = self._get_valid_cache_keys()
-            for key in valid_keys:
-                self.cache[key] = None
-            
-            self.cache['cache_metadata'] = {}
-            self.cache['last_updated'] = None
-            
-            logger.info("Cleared all cached data")
-            return {'status': 'success', 'cleared_keys': valid_keys}
-    
     def get_summary_stats(self) -> Dict:
-        """Get summary statistics across all networks with settings info"""
+        """Get summary statistics across all networks with orjson performance info"""
         stats = {
             "total_tokens_tracked": 0,
             "total_activity": 0,
@@ -478,19 +670,25 @@ class AnalysisService:
                 "environment": settings.environment,
                 "supported_networks": [net.value for net in settings.monitor.supported_networks],
                 "excluded_tokens_count": len(analysis_config.excluded_tokens),
-                "alert_thresholds": monitor_config.alert_thresholds
+                "alert_thresholds": monitor_config.alert_thresholds,
+                "orjson_optimization": ORJSON_AVAILABLE
             }
         }
         
         # Analyze each supported network
         for network in settings.monitor.supported_networks:
             network_name = network.value
+            # Map eth to ethereum
+            if network_name == 'eth':
+                network_name = 'ethereum'
+                
             network_stats = {
                 "buy_data": False,
                 "sell_data": False,
                 "tokens_tracked": 0,
                 "activity_count": 0,
-                "last_updated": None
+                "last_updated": None,
+                "orjson_optimized": False
             }
             
             # Check buy data
@@ -501,6 +699,7 @@ class AnalysisService:
                 network_stats["tokens_tracked"] += buy_data.get('unique_tokens', 0)
                 network_stats["activity_count"] += buy_data.get('total_purchases', 0)
                 network_stats["last_updated"] = buy_data.get('last_updated')
+                network_stats["orjson_optimized"] = buy_data.get('config_info', {}).get('orjson_optimized', False)
                 stats["networks_active"] += 1
             
             # Check sell data
@@ -512,6 +711,7 @@ class AnalysisService:
                 network_stats["activity_count"] += sell_data.get('total_sells', 0)
                 if not network_stats["last_updated"] or (sell_data.get('last_updated') and sell_data['last_updated'] > network_stats["last_updated"]):
                     network_stats["last_updated"] = sell_data.get('last_updated')
+                    network_stats["orjson_optimized"] = sell_data.get('config_info', {}).get('orjson_optimized', False)
             
             stats["networks_summary"][network_name] = network_stats
             stats["total_tokens_tracked"] += network_stats["tokens_tracked"]
@@ -525,18 +725,27 @@ class AnalysisService:
         return stats
     
     def get_cache_metrics(self) -> Dict:
-        """Get detailed cache performance metrics"""
+        """Get detailed cache performance metrics with orjson information"""
         metrics = {
             "cache_size": len([k for k, v in self.cache.items() if v is not None and k not in ['last_updated', 'cache_metadata']]),
             "memory_usage_estimate": sum(len(str(v)) for v in self.cache.values() if v is not None),
             "cache_hit_potential": {},
             "environment": settings.environment,
-            "uptime": self._get_service_uptime()
+            "uptime": self._get_service_uptime(),
+            "orjson_status": {
+                "available": ORJSON_AVAILABLE,
+                "enabled": self.cache_config['use_orjson'],
+                "performance_benchmarking": self.cache_config['benchmark_performance']
+            }
         }
         
         # Calculate cache freshness for each network
         for network in settings.monitor.supported_networks:
             network_name = network.value
+            # Map eth to ethereum
+            if network_name == 'eth':
+                network_name = 'ethereum'
+                
             for analysis_type in ['buy', 'sell']:
                 key = f"{network_name}_{analysis_type}"
                 cache_entry = self.cache.get(key)
@@ -545,11 +754,21 @@ class AnalysisService:
                     try:
                         cache_time = datetime.fromisoformat(cache_entry['timestamp'])
                         age_minutes = (datetime.now() - cache_time).total_seconds() / 60
-                        metrics["cache_hit_potential"][key] = {
+                        
+                        entry_metrics = {
                             "age_minutes": round(age_minutes, 1),
                             "is_fresh": age_minutes < (self.cache_config['max_age_hours'] * 60),
-                            "config_current": not self._has_config_changed(cache_entry)
+                            "config_current": not self._has_config_changed(cache_entry),
+                            "orjson_optimized": cache_entry.get('orjson_available', False),
+                            "serialization_method": cache_entry.get('serialization_method', 'json')
                         }
+                        
+                        # Add performance metrics if available
+                        if cache_entry.get('performance_metrics'):
+                            entry_metrics["performance"] = cache_entry['performance_metrics']
+                        
+                        metrics["cache_hit_potential"][key] = entry_metrics
+                        
                     except ValueError:
                         metrics["cache_hit_potential"][key] = {"status": "invalid_timestamp"}
                 else:

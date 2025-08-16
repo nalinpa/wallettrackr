@@ -1,120 +1,136 @@
 #!/usr/bin/env python3
 """
-Test with realistic analysis parameters
+Test orjson performance with real crypto data
 """
 import sys
 import os
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tracker.buy_tracker import ComprehensiveBuyTracker
-import time
+from utils.json_utils import benchmark_json_performance, orjson_dumps_str, orjson_loads
+from data_service import AnalysisService
 import logging
 
-# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def test_realistic_analysis():
-    """Test with realistic parameters"""
-    print("🧪 Testing realistic analysis parameters...")
+def test_orjson_with_real_data():
+    """Test orjson performance with actual crypto analysis data"""
     
-    # More realistic parameters
-    network = "base"
-    num_wallets = 25     # Manageable size for testing
-    days_back = 1        # 3 days of data (more realistic)
+    # Create sample data similar to your analysis results
+    sample_data = {
+        "status": "success",
+        "network": "base",
+        "analysis_type": "buy",
+        "total_purchases": 1247,
+        "unique_tokens": 156,
+        "total_eth_spent": 234.5678,
+        "total_usd_spent": 469135.6,
+        "top_tokens": [
+            {
+                "rank": i,
+                "token": f"TOKEN_{i}",
+                "alpha_score": 89.5 - (i * 0.5),
+                "wallet_count": 45 - i,
+                "total_eth_spent": 12.3456 - (i * 0.1),
+                "platforms": ["Uniswap", "Aerodrome", "BaseSwap"],
+                "contract_address": f"0x{'1234567890abcdef' * 2}{i:08x}",
+                "avg_wallet_score": 150.0 - (i * 2),
+                "meets_alert_threshold": i < 5,
+                "is_base_native": i % 3 == 0,
+                "web3_analysis": {
+                    "gas_efficiency": 85.5 + (i % 15),
+                    "method_used": "swapExactTokensForETH" if i % 2 == 0 else "exactInputSingle",
+                    "sophistication_score": 75.0 + (i % 25),
+                    "complexity_score": 0.7 + (i % 3) * 0.1
+                }
+            }
+            for i in range(50)  # 50 tokens
+        ],
+        "platform_summary": {
+            "Uniswap": 456,
+            "Aerodrome": 378,
+            "BaseSwap": 234,
+            "1inch": 156,
+            "Unknown": 23
+        },
+        "web3_analysis": {
+            "total_transactions_analyzed": 1247,
+            "sophisticated_transactions": 892,
+            "method_distribution": {
+                "swapExactTokensForETH": 456,
+                "exactInputSingle": 378,
+                "swapExactETHForTokens": 234,
+                "transfer": 123,
+                "unknown": 56
+            },
+            "gas_efficiency_avg": 82.5,
+            "avg_sophistication": 76.8
+        },
+        "config_info": {
+            "excluded_tokens_count": 15,
+            "min_eth_value": 0.001,
+            "environment": "production"
+        },
+        "last_updated": "2025-01-16T10:30:45.123456",
+        "cache_metadata": {
+            "size_estimate": 125000,
+            "token_count": 156,
+            "network": "base"
+        }
+    }
     
-    print(f"\n🎯 Testing {network.upper()} buy analysis:")
-    print(f"   📊 Wallets: {num_wallets}")
-    print(f"   ⏰ Days back: {days_back} days")
-    print(f"   🔍 Looking for: Recent real trading activity")
+    print("🧪 Testing orjson Performance with Crypto Analysis Data")
+    print("="*60)
     
-    try:
-        tracker = ComprehensiveBuyTracker(network)
+    # Test different data sizes
+    test_cases = [
+        ("Small (10 tokens)", {**sample_data, "top_tokens": sample_data["top_tokens"][:10]}),
+        ("Medium (25 tokens)", {**sample_data, "top_tokens": sample_data["top_tokens"][:25]}),
+        ("Large (50 tokens)", sample_data),
+        ("Extra Large (100 tokens)", {**sample_data, "top_tokens": sample_data["top_tokens"] * 2})
+    ]
+    
+    for test_name, test_data in test_cases:
+        print(f"\n📊 {test_name}")
+        print("-" * 40)
         
-        if not tracker.test_connection():
-            print(f"❌ Failed to connect to {network}")
-            return
+        metrics = benchmark_json_performance(test_data, iterations=500)
         
-        print(f"\n🚀 Starting realistic analysis...")
-        start_time = time.time()
+        print(f"Serialization:")
+        print(f"  orjson:     {metrics['orjson_serialize_ms']:.2f}ms")
+        print(f"  json:       {metrics['json_serialize_ms']:.2f}ms")
+        print(f"  Speedup:    {metrics['serialize_speedup']:.1f}x")
         
-        # Run analysis with realistic parameters
-        results = tracker.analyze_all_trading_methods(
-            num_wallets=num_wallets,
-            days_back=days_back,
-            max_wallets_for_sse=False
-        )
+        print(f"Round-trip:")
+        print(f"  orjson:     {metrics['orjson_roundtrip_ms']:.2f}ms")
+        print(f"  json:       {metrics['json_roundtrip_ms']:.2f}ms")
+        print(f"  Speedup:    {metrics['roundtrip_speedup']:.1f}x")
         
-        end_time = time.time()
-        total_time = end_time - start_time
-        
-        # Show detailed results
-        print(f"\n📊 Realistic Analysis Results:")
-        print(f"   ⏱️  Total time: {total_time:.1f} seconds")
-        print(f"   ⚡ Wallets per second: {num_wallets/total_time:.2f}")
-        print(f"   📈 Time per wallet: {total_time/num_wallets:.1f}s")
-        
-        if results:
-            total_purchases = results.get('total_purchases', 0)
-            unique_tokens = results.get('unique_tokens', 0)
-            total_eth = results.get('total_eth_spent', 0)
-            
-            print(f"   💰 Total purchases: {total_purchases}")
-            print(f"   🪙 Unique tokens: {unique_tokens}")
-            print(f"   💎 Total ETH: {total_eth:.4f}")
-            
-            if total_purchases > 0:
-                print(f"   📊 Avg purchases per wallet: {total_purchases/num_wallets:.1f}")
-                print(f"   💰 Avg ETH per purchase: {total_eth/total_purchases:.4f}")
-            
-            # Show top tokens with more details
-            top_tokens = results.get('ranked_tokens', [])[:5]
-            if top_tokens:
-                print(f"\n🏆 Top {len(top_tokens)} Tokens Found:")
-                for i, (token, data, score) in enumerate(top_tokens, 1):
-                    wallets = len(data.get('wallets', []))
-                    eth = data.get('total_eth_spent', 0)
-                    platforms = list(data.get('platforms', []))[:2]  # Show top 2 platforms
-                    
-                    platform_str = ", ".join(platforms) if platforms else "Unknown"
-                    print(f"      {i}. {token}")
-                    print(f"         💰 {wallets} wallets, {eth:.4f} ETH, α={score:.1f}")
-                    print(f"         🏪 Platforms: {platform_str}")
-            
-            # Platform analysis
-            platform_summary = results.get('platform_summary', {})
-            if platform_summary:
-                print(f"\n🏪 Platform Distribution:")
-                for platform, count in sorted(platform_summary.items(), key=lambda x: x[1], reverse=True):
-                    percentage = (count / total_purchases) * 100 if total_purchases > 0 else 0
-                    print(f"      {platform}: {count} ({percentage:.1f}%)")
-        else:
-            print(f"   ℹ️  No significant activity found in {days_back} days")
-        
-        # Performance projections
-        print(f"\n📈 Performance Projections:")
-        time_per_wallet = total_time / num_wallets
-        
-        # Estimate for full analysis
-        full_173_time = time_per_wallet * 173
-        print(f"   🎯 Estimated 173 wallets: {full_173_time:.0f} seconds ({full_173_time/60:.1f} minutes)")
-        
-        # Compare with old requests method
-        old_estimated_time = 300  # 5 minutes was typical before
-        improvement = old_estimated_time / full_173_time if full_173_time > 0 else 1
-        print(f"   📉 vs old requests method: ~{improvement:.1f}x faster")
-        
-        # httpx specific metrics
-        total_api_calls = num_wallets * 3  # ~3 calls per wallet (block range + 2 transfers)
-        calls_per_second = total_api_calls / total_time
-        print(f"   ⚡ API calls efficiency: {total_api_calls} calls in {total_time:.1f}s = {calls_per_second:.1f} calls/sec")
-        
-        tracker.close_connections()
-        
-    except Exception as e:
-        print(f"❌ Error during realistic analysis: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"Size:")
+        print(f"  orjson:     {metrics['serialized_size_orjson']:,} bytes")
+        print(f"  json:       {metrics['serialized_size_json']:,} bytes")
+        size_ratio = metrics['serialized_size_json'] / metrics['serialized_size_orjson']
+        print(f"  Ratio:      {size_ratio:.2f}x")
+    
+    # Test with cache service
+    print(f"\n🔧 Testing with AnalysisService Cache")
+    print("-" * 40)
+    
+    service = AnalysisService()
+    service.cache_config['benchmark_performance'] = True
+    
+    # Cache the data
+    service.cache_data('base_buy', sample_data)
+    
+    # Retrieve the data
+    cached_data = service.get_cached_data('base_buy')
+    
+    if cached_data:
+        print("✅ Cache test successful with orjson")
+        print(f"   Cached tokens: {cached_data.get('unique_tokens', 0)}")
+        print(f"   Data integrity: {'✅' if cached_data['total_purchases'] == sample_data['total_purchases'] else '❌'}")
+    else:
+        print("❌ Cache test failed")
 
 if __name__ == "__main__":
-    test_realistic_analysis()
+    test_orjson_with_real_data()

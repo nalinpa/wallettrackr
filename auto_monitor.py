@@ -511,6 +511,11 @@ class EnhancedMonitor:
             for line in error_lines:
                 if line.strip():
                     print(f"   🔍 Error detail: {line.strip()}")
+                    
+        try:
+            buy_tracker.close_connections()
+        except:
+            pass
         
         return alerts   
  
