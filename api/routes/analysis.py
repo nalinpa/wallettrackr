@@ -179,18 +179,218 @@ async def stream_buy_analysis(
     wallets: int = Query(173, ge=1, le=500),
     days: float = Query(1.0, ge=0.1, le=7.0)
 ):
-    """Stream buy analysis with real-time progress updates"""
+    """Stream buy analysis - Flask style approach"""
     
-    async def generate_stream():
+    print(f"Starting stream for {network} buy analysis: {wallets} wallets, {days} days")
+    
+    def generate_stream():
         try:
-            async with BuyAnalyzer(network) as analyzer:
-                async for update in analyzer.analyze_with_progress(wallets, days):
-                    sanitized_update = sanitize_for_orjson(update)
-                    yield f"data: {orjson_dumps_str(sanitized_update)}\n\n"
+            # Send start message
+            start_msg = ProgressUpdate(
+                type="progress",
+                processed=0,
+                total=wallets,
+                percentage=0,
+                message=f"Starting {network} buy analysis..."
+            )
+            yield f"data: {orjson_dumps_str(start_msg.dict())}\n\n"
+            
+            # Initialize analyzer (sync style)
+            analyzer = None
+            try:
+                # Create analyzer synchronously
+                logger.info(f"📡 Initializing {network} buy analyzer")
+                
+                # Run async initialization in sync context
+                import asyncio
+                
+                async def init_analyzer():
+                    analyzer = BuyAnalyzer(network)
+                    await analyzer.__aenter__()  # Initialize the context
+                    return analyzer
+                
+                # Get event loop and run initialization
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                
+                analyzer = loop.run_until_complete(init_analyzer())
+                
+                init_msg = ProgressUpdate(
+                    type="progress",
+                    processed=1,
+                    total=wallets,
+                    percentage=1,
+                    message=f"Analyzer initialized for {network}"
+                )
+                yield f"data: {orjson_dumps_str(init_msg.dict())}\n\n"
+                
+            except Exception as e:
+                error_msg = ProgressUpdate(type="error", error=f"Failed to initialize analyzer: {str(e)}")
+                yield f"data: {orjson_dumps_str(error_msg.dict())}\n\n"
+                return
+            
+            # Test connections
+            try:
+                logger.info(f"🔌 Testing connections for {network}")
+                
+                async def test_connections():
+                    return await analyzer.services.test_connections()
+                
+                connections = loop.run_until_complete(test_connections())
+                
+                if not all(connections.values()):
+                    failed_services = [k for k, v in connections.items() if not v]
+                    error_msg = ProgressUpdate(type="error", error=f"Connection failed: {failed_services}")
+                    yield f"data: {orjson_dumps_str(error_msg.dict())}\n\n"
+                    return
+                
+                conn_msg = ProgressUpdate(
+                    type="progress",
+                    processed=5,
+                    total=wallets,
+                    percentage=5,
+                    message=f"Connected to {network} services"
+                )
+                yield f"data: {orjson_dumps_str(conn_msg.dict())}\n\n"
+                
+            except Exception as e:
+                error_msg = ProgressUpdate(type="error", error=f"Connection test failed: {str(e)}")
+                yield f"data: {orjson_dumps_str(error_msg.dict())}\n\n"
+                return
+            
+            # Run main analysis
+            try:
+                logger.info(f"📊 Starting main analysis: {wallets} wallets over {days} days")
+                
+                # Send analysis start message
+                analysis_msg = ProgressUpdate(
+                    type="progress",
+                    processed=10,
+                    total=wallets,
+                    percentage=10,
+                    message=f"Analyzing {wallets} wallets over {days} days..."
+                )
+                yield f"data: {orjson_dumps_str(analysis_msg.dict())}\n\n"
+                
+                # Run the analysis
+                start_time = time.time()
+                
+                async def run_analysis():
+                    return await analyzer.analyze_wallets_concurrent(
+                        num_wallets=wallets,
+                        days_back=days
+                    )
+                
+                result = loop.run_until_complete(run_analysis())
+                analysis_time = time.time() - start_time
+                
+                logger.info(f"✅ Analysis completed in {analysis_time:.2f}s")
+                
+                # Send progress completion
+                complete_msg = ProgressUpdate(
+                    type="progress",
+                    processed=wallets,
+                    total=wallets,
+                    percentage=100,
+                    message=f"Analysis complete in {analysis_time:.1f}s, formatting results..."
+                )
+                yield f"data: {orjson_dumps_str(complete_msg.dict())}\n\n"
+                
+                # Format and send results
+                if result and result.total_transactions > 0:
+                    logger.info(f"📋 Found {result.total_transactions} transactions, formatting response...")
                     
+                    # Build response data (Flask style)
+                    response_data = {
+                        "status": "success",
+                        "network": network,
+                        "analysis_type": "buy",
+                        "total_purchases": result.total_transactions,
+                        "unique_tokens": result.unique_tokens,
+                        "total_eth_spent": result.total_eth_value,
+                        "total_usd_spent": result.total_eth_value * 2500,  # Rough ETH price
+                        "top_tokens": [],
+                        "platform_summary": result.performance_metrics.get('platform_summary', {}),
+                        "web3_enhanced": result.web3_enhanced,
+                        "orjson_enabled": ORJSON_AVAILABLE,
+                        "analysis_time_seconds": analysis_time,
+                        "last_updated": datetime.now()
+                    }
+                    
+                    # Add top tokens
+                    for i, (token, data, score) in enumerate(result.ranked_tokens[:20], 1):
+                        token_analysis = {
+                            "rank": i,
+                            "token": token,
+                            "alpha_score": score,
+                            "wallet_count": len(data.get('wallets', [])),
+                            "total_eth_spent": data.get('total_eth_spent', 0),
+                            "platforms": list(data.get('platforms', [])),
+                            "contract_address": data.get('contract_address', ''),
+                            "avg_wallet_score": data.get('avg_wallet_score', 0),
+                            "sophistication_score": data.get('avg_sophistication'),
+                            "is_base_native": data.get('is_base_native', False)
+                        }
+                        response_data['top_tokens'].append(token_analysis)
+                    
+                    results_msg = ProgressUpdate(
+                        type="results",
+                        data=sanitize_for_orjson(response_data)
+                    )
+                    yield f"data: {orjson_dumps_str(results_msg.dict())}\n\n"
+                    logger.info(f"📤 Results sent to client")
+                    
+                else:
+                    logger.warning("⚠️ No results found in analysis")
+                    no_results_msg = ProgressUpdate(
+                        type="results",
+                        data={
+                            "status": "success",
+                            "network": network,
+                            "analysis_type": "buy",
+                            "total_purchases": 0,
+                            "unique_tokens": 0,
+                            "total_eth_spent": 0.0,
+                            "total_usd_spent": 0.0,
+                            "top_tokens": [],
+                            "platform_summary": {},
+                            "message": "No significant activity found",
+                            "analysis_time_seconds": analysis_time,
+                            "last_updated": datetime.now()
+                        }
+                    )
+                    yield f"data: {orjson_dumps_str(no_results_msg.dict())}\n\n"
+                
+            except Exception as analysis_error:
+                analysis_time = time.time() - start_time if 'start_time' in locals() else 0
+                logger.error(f"❌ Analysis failed after {analysis_time:.2f}s: {str(analysis_error)}", exc_info=True)
+                
+                error_msg = ProgressUpdate(
+                    type="error",
+                    error=f"Analysis failed: {str(analysis_error)}"
+                )
+                yield f"data: {orjson_dumps_str(error_msg.dict())}\n\n"
+                return
+            
+            # Send completion
+            final_msg = ProgressUpdate(type="complete", message="Analysis complete")
+            yield f"data: {orjson_dumps_str(final_msg.dict())}\n\n"
+            logger.info(f"🎉 Stream completed successfully")
+            
+            # Cleanup
+            if analyzer:
+                try:
+                    loop.run_until_complete(analyzer.__aexit__(None, None, None))
+                except:
+                    pass
+            
         except Exception as e:
-            error_update = {'type': 'error', 'error': str(e)}
-            yield f"data: {orjson_dumps_str(error_update)}\n\n"
+            logger.error(f"💥 Stream error: {str(e)}", exc_info=True)
+            error_msg = ProgressUpdate(type="error", error=f"Stream error: {str(e)}")
+            yield f"data: {orjson_dumps_str(error_msg.dict())}\n\n"
     
     return StreamingResponse(
         generate_stream(),
@@ -208,18 +408,191 @@ async def stream_sell_analysis(
     wallets: int = Query(173, ge=1, le=500),
     days: float = Query(1.0, ge=0.1, le=7.0)
 ):
-    """Stream sell analysis with real-time progress updates"""
+    """Stream sell analysis - Flask style approach"""
     
-    async def generate_stream():
+    def generate_stream():
         try:
-            async with SellAnalyzer(network) as analyzer:
-                async for update in analyzer.analyze_with_progress(wallets, days):
-                    sanitized_update = sanitize_for_orjson(update)
-                    yield f"data: {orjson_dumps_str(sanitized_update)}\n\n"
+            # Send start message
+            start_msg = ProgressUpdate(
+                type="progress",
+                processed=0,
+                total=wallets,
+                percentage=0,
+                message=f"Starting {network} sell pressure analysis..."
+            )
+            yield f"data: {orjson_dumps_str(start_msg.dict())}\n\n"
+            
+            # Initialize analyzer
+            analyzer = None
+            try:
+                import asyncio
+                
+                async def init_analyzer():
+                    analyzer = SellAnalyzer(network)
+                    await analyzer.__aenter__()
+                    return analyzer
+                
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                
+                analyzer = loop.run_until_complete(init_analyzer())
+                
+                init_msg = ProgressUpdate(
+                    type="progress",
+                    processed=1,
+                    total=wallets,
+                    percentage=1,
+                    message=f"Sell analyzer initialized for {network}"
+                )
+                yield f"data: {orjson_dumps_str(init_msg.dict())}\n\n"
+                
+            except Exception as e:
+                error_msg = ProgressUpdate(type="error", error=f"Failed to initialize analyzer: {str(e)}")
+                yield f"data: {orjson_dumps_str(error_msg.dict())}\n\n"
+                return
+            
+            # Test connections
+            try:
+                async def test_connections():
+                    return await analyzer.services.test_connections()
+                
+                connections = loop.run_until_complete(test_connections())
+                
+                if not all(connections.values()):
+                    failed_services = [k for k, v in connections.items() if not v]
+                    error_msg = ProgressUpdate(type="error", error=f"Connection failed: {failed_services}")
+                    yield f"data: {orjson_dumps_str(error_msg.dict())}\n\n"
+                    return
+                
+                conn_msg = ProgressUpdate(
+                    type="progress",
+                    processed=5,
+                    total=wallets,
+                    percentage=5,
+                    message=f"Connected to {network} services"
+                )
+                yield f"data: {orjson_dumps_str(conn_msg.dict())}\n\n"
+                
+            except Exception as e:
+                error_msg = ProgressUpdate(type="error", error=f"Connection test failed: {str(e)}")
+                yield f"data: {orjson_dumps_str(error_msg.dict())}\n\n"
+                return
+            
+            # Run analysis
+            try:
+                analysis_msg = ProgressUpdate(
+                    type="progress",
+                    processed=10,
+                    total=wallets,
+                    percentage=10,
+                    message=f"Analyzing sell pressure for {wallets} wallets..."
+                )
+                yield f"data: {orjson_dumps_str(analysis_msg.dict())}\n\n"
+                
+                start_time = time.time()
+                
+                async def run_analysis():
+                    return await analyzer.analyze_wallets_concurrent(
+                        num_wallets=wallets,
+                        days_back=days
+                    )
+                
+                result = loop.run_until_complete(run_analysis())
+                analysis_time = time.time() - start_time
+                
+                complete_msg = ProgressUpdate(
+                    type="progress",
+                    processed=wallets,
+                    total=wallets,
+                    percentage=100,
+                    message=f"Sell analysis complete in {analysis_time:.1f}s"
+                )
+                yield f"data: {orjson_dumps_str(complete_msg.dict())}\n\n"
+                
+                # Format results
+                if result and result.total_transactions > 0:
+                    response_data = {
+                        "status": "success",
+                        "network": network,
+                        "analysis_type": "sell",
+                        "total_sells": result.total_transactions,
+                        "unique_tokens": result.unique_tokens,
+                        "total_estimated_eth": result.total_eth_value,
+                        "top_tokens": [],
+                        "method_summary": result.performance_metrics.get('method_summary', {}),
+                        "web3_enhanced": result.web3_enhanced,
+                        "orjson_enabled": ORJSON_AVAILABLE,
+                        "analysis_time_seconds": analysis_time,
+                        "last_updated": datetime.now()
+                    }
                     
+                    # Add top tokens
+                    for i, (token, data, score) in enumerate(result.ranked_tokens[:20], 1):
+                        token_analysis = {
+                            "rank": i,
+                            "token": token,
+                            "sell_score": score,  # Different field for sells
+                            "wallet_count": len(data.get('wallets', [])),
+                            "total_estimated_eth": data.get('total_estimated_eth', 0),
+                            "methods": list(data.get('platforms', [])),  # Different field
+                            "contract_address": data.get('contract_address', ''),
+                            "avg_wallet_score": data.get('avg_wallet_score', 0),
+                            "sophistication_score": data.get('avg_sophistication'),
+                            "is_base_native": data.get('is_base_native', False)
+                        }
+                        response_data['top_tokens'].append(token_analysis)
+                    
+                    results_msg = ProgressUpdate(
+                        type="results",
+                        data=sanitize_for_orjson(response_data)
+                    )
+                    yield f"data: {orjson_dumps_str(results_msg.dict())}\n\n"
+                    
+                else:
+                    no_results_msg = ProgressUpdate(
+                        type="results",
+                        data={
+                            "status": "success",
+                            "network": network,
+                            "analysis_type": "sell",
+                            "total_sells": 0,
+                            "unique_tokens": 0,
+                            "total_estimated_eth": 0.0,
+                            "top_tokens": [],
+                            "method_summary": {},
+                            "message": "No sell pressure detected",
+                            "analysis_time_seconds": analysis_time,
+                            "last_updated": datetime.now()
+                        }
+                    )
+                    yield f"data: {orjson_dumps_str(no_results_msg.dict())}\n\n"
+                
+            except Exception as analysis_error:
+                error_msg = ProgressUpdate(
+                    type="error",
+                    error=f"Sell analysis failed: {str(analysis_error)}"
+                )
+                yield f"data: {orjson_dumps_str(error_msg.dict())}\n\n"
+                return
+            
+            # Send completion
+            final_msg = ProgressUpdate(type="complete", message="Sell analysis complete")
+            yield f"data: {orjson_dumps_str(final_msg.dict())}\n\n"
+            
+            # Cleanup
+            if analyzer:
+                try:
+                    loop.run_until_complete(analyzer.__aexit__(None, None, None))
+                except:
+                    pass
+            
         except Exception as e:
-            error_update = {'type': 'error', 'error': str(e)}
-            yield f"data: {orjson_dumps_str(error_update)}\n\n"
+            logger.error(f"💥 Sell stream error: {str(e)}", exc_info=True)
+            error_msg = ProgressUpdate(type="error", error=f"Stream error: {str(e)}")
+            yield f"data: {orjson_dumps_str(error_msg.dict())}\n\n"
     
     return StreamingResponse(
         generate_stream(),
