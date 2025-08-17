@@ -1,67 +1,25 @@
 import asyncio
 import time
-import requests
-import platform
+from services.blockchain_services.service_container import ServiceContainer
 
-async def test_uvloop_performance():
-    """Test uvloop performance benefits"""
+async def test_performance():
+    """Test performance"""
+    print("🚀 PERFORMANCE TEST")
+    print("=" * 60)
     
-    print("🧪 Testing uvloop Performance")
-    print("="*40)
-    print(f"Platform: {platform.system()}")
-    
-    # Test if uvloop is active
-    try:
-        import uvloop
-        print("✅ uvloop module available")
+    async with ServiceContainer("base") as services:
+        # Test database
+        wallets = await services.database.get_top_wallets("base", 10)
+        print(f"✅ Retrieved {len(wallets)} wallets")
         
-        # Check if uvloop is the active event loop
-        loop = asyncio.get_event_loop()
-        loop_type = type(loop).__name__
-        print(f"Event loop type: {loop_type}")
+        # Test alchemy
+        start_block, end_block = await services.alchemy.get_block_range(0.1)
+        print(f"✅ Block range: {start_block} to {end_block}")
         
-        if 'uvloop' in loop_type.lower():
-            print("🚀 uvloop is ACTIVE!")
-        else:
-            print("⚠️  Standard event loop (uvloop not active)")
-            
-    except ImportError:
-        print("❌ uvloop not installed")
-        return
-    
-    # Performance test
-    print("\n📊 Performance Test:")
-    
-    # Test HTTP requests
-    try:
-        print("Testing HTTP performance...")
-        start_time = time.perf_counter()
-        
-        # Make several requests
-        for i in range(10):
-            try:
-                response = requests.get('http://localhost:5005/api/status', timeout=5)
-                if response.status_code == 200:
-                    print(f"  Request {i+1}: ✅")
-                else:
-                    print(f"  Request {i+1}: ❌ {response.status_code}")
-            except Exception as e:
-                print(f"  Request {i+1}: ❌ {e}")
-        
-        total_time = time.perf_counter() - start_time
-        avg_time = total_time / 10
-        
-        print(f"\n📈 Results:")
-        print(f"  Total time: {total_time:.2f}s")
-        print(f"  Average per request: {avg_time*1000:.1f}ms")
-        
-        if 'uvloop' in loop_type.lower():
-            print(f"  🚀 With uvloop optimization!")
-        else:
-            print(f"  📊 Without uvloop (run in Docker for 30-40% improvement)")
-            
-    except Exception as e:
-        print(f"❌ Performance test failed: {e}")
+        # Test batch transfers
+        addresses = [w['address'] for w in wallets[:5]]
+        transfers = await services.alchemy.get_transfers_batch(addresses, start_block, end_block)
+        print(f"✅ Processed {len(addresses)} wallets")
 
 if __name__ == "__main__":
-    asyncio.run(test_uvloop_performance())
+    asyncio.run(test_performance())

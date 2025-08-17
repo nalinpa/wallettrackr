@@ -56,12 +56,13 @@ async def health_check():
         "environment": settings.environment
     }
 
-# Import and register route modules
 from api.routes.analysis import router as analysis_router
-from api.routes.monitoring import router as monitoring_router
+from api.routes.status import router as status_router
+from api.routes.cache import router as cache_router
 
 app.include_router(analysis_router, prefix="/api")
-app.include_router(monitoring_router, prefix="/api/monitor")
+app.include_router(status_router, prefix="/api")
+app.include_router(cache_router, prefix="/api")
 
 # Global exception handler
 @app.exception_handler(Exception)
