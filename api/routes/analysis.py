@@ -55,7 +55,7 @@ async def analyze_buy_transactions(
     start_time = time.time()
     
     try:
-        logger.info(f"🚀 Starting {network} buy analysis: {params['wallets']} wallets, {params['days']} days")
+        print(f"🚀 Starting {network} buy analysis: {params['wallets']} wallets, {params['days']} days")
         
         # Use clean analyzer - no "async" prefix
         async with BuyAnalyzer(network) as analyzer:
@@ -76,7 +76,7 @@ async def analyze_buy_transactions(
             
             # Check if analysis returned a valid result
             if result is None:
-                logger.warning(f"⚠️ Analysis returned None for {network} - creating empty result")
+                print(f"⚠️ Analysis returned None for {network} - creating empty result")
                 # Return empty result instead of error since this is normal when no transactions found
                 return BuyAnalysisResponse(
                     network=network,
@@ -112,7 +112,7 @@ async def analyze_buy_transactions(
             return response_data
             
     except Exception as e:
-        logger.error(f"❌ {network} buy analysis failed: {e}", exc_info=True)
+        print(f"❌ {network} buy analysis failed: {e} 115 - routes")
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
 @router.get("/{network}/sell", response_model=SellAnalysisResponse)
@@ -124,8 +124,8 @@ async def analyze_sell_pressure(
     start_time = time.time()
     
     try:
-        logger.info(f"🚀 Starting {network} sell analysis: {params['wallets']} wallets, {params['days']} days")
-        
+        print(f"🚀 Starting {network} sell analysis: {params['wallets']} wallets, {params['days']} days")
+
         # Use clean analyzer - no "async" prefix
         async with SellAnalyzer(network) as analyzer:
             # Test connections
@@ -145,7 +145,7 @@ async def analyze_sell_pressure(
             
             # Check if analysis returned a valid result
             if result is None:
-                logger.error(f"❌ Analysis returned None for {network}")
+                print(f"❌ Analysis returned None for {network} 148 - routes")
                 raise HTTPException(
                     status_code=500, 
                     detail="Analysis failed - no result returned"
@@ -170,7 +170,7 @@ async def analyze_sell_pressure(
             return response_data
             
     except Exception as e:
-        logger.error(f"❌ {network} sell analysis failed: {e}", exc_info=True)
+        print(f"❌ {network} sell analysis failed: {e} 173 - routes")
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
 @router.get("/{network}/buy/stream")
@@ -199,8 +199,8 @@ async def stream_buy_analysis(
             analyzer = None
             try:
                 # Create analyzer synchronously
-                logger.info(f"📡 Initializing {network} buy analyzer")
-                
+                print(f"📡 Initializing {network} buy analyzer")
+
                 # Run async initialization in sync context
                 import asyncio
                 
@@ -234,7 +234,7 @@ async def stream_buy_analysis(
             
             # Test connections
             try:
-                logger.info(f"🔌 Testing connections for {network}")
+                print(f"🔌 Testing connections for {network}")
                 
                 async def test_connections():
                     return await analyzer.services.test_connections()
@@ -263,8 +263,8 @@ async def stream_buy_analysis(
             
             # Run main analysis
             try:
-                logger.info(f"📊 Starting main analysis: {wallets} wallets over {days} days")
-                
+                print(f"📊 Starting main analysis: {wallets} wallets over {days} days")
+
                 # Send analysis start message
                 analysis_msg = ProgressUpdate(
                     type="progress",
@@ -286,9 +286,9 @@ async def stream_buy_analysis(
                 
                 result = loop.run_until_complete(run_analysis())
                 analysis_time = time.time() - start_time
-                
-                logger.info(f"✅ Analysis completed in {analysis_time:.2f}s")
-                
+
+                print(f"✅ Analysis completed in {analysis_time:.2f}s")
+
                 # Send progress completion
                 complete_msg = ProgressUpdate(
                     type="progress",
@@ -301,8 +301,8 @@ async def stream_buy_analysis(
                 
                 # Format and send results
                 if result and result.total_transactions > 0:
-                    logger.info(f"📋 Found {result.total_transactions} transactions, formatting response...")
-                    
+                    print(f"📋 Found {result.total_transactions} transactions, formatting response...")
+
                     # Build response data (Flask style)
                     response_data = {
                         "status": "success",
@@ -341,10 +341,10 @@ async def stream_buy_analysis(
                         data=sanitize_for_orjson(response_data)
                     )
                     yield f"data: {orjson_dumps_str(results_msg.dict())}\n\n"
-                    logger.info(f"📤 Results sent to client")
-                    
+                    print(f"📤 Results sent to client")
+
                 else:
-                    logger.warning("⚠️ No results found in analysis")
+                    print("⚠️ No results found in analysis")
                     no_results_msg = ProgressUpdate(
                         type="results",
                         data={
@@ -366,8 +366,8 @@ async def stream_buy_analysis(
                 
             except Exception as analysis_error:
                 analysis_time = time.time() - start_time if 'start_time' in locals() else 0
-                logger.error(f"❌ Analysis failed after {analysis_time:.2f}s: {str(analysis_error)}", exc_info=True)
-                
+                print(f"❌ Analysis failed after {analysis_time:.2f}s: {str(analysis_error)} 369 - routes")
+
                 error_msg = ProgressUpdate(
                     type="error",
                     error=f"Analysis failed: {str(analysis_error)}"
@@ -378,8 +378,8 @@ async def stream_buy_analysis(
             # Send completion
             final_msg = ProgressUpdate(type="complete", message="Analysis complete")
             yield f"data: {orjson_dumps_str(final_msg.dict())}\n\n"
-            logger.info(f"🎉 Stream completed successfully")
-            
+            print(f"🎉 Stream completed successfully")
+
             # Cleanup
             if analyzer:
                 try:
@@ -388,7 +388,7 @@ async def stream_buy_analysis(
                     pass
             
         except Exception as e:
-            logger.error(f"💥 Stream error: {str(e)}", exc_info=True)
+            print(f"💥 Stream error: {str(e)}")
             error_msg = ProgressUpdate(type="error", error=f"Stream error: {str(e)}")
             yield f"data: {orjson_dumps_str(error_msg.dict())}\n\n"
     
@@ -590,7 +590,7 @@ async def stream_sell_analysis(
                     pass
             
         except Exception as e:
-            logger.error(f"💥 Sell stream error: {str(e)}", exc_info=True)
+            print(f"💥 Sell stream error: {str(e)}")
             error_msg = ProgressUpdate(type="error", error=f"Stream error: {str(e)}")
             yield f"data: {orjson_dumps_str(error_msg.dict())}\n\n"
     

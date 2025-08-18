@@ -213,6 +213,23 @@
     .retry-button:hover {
         background: #c82333;
     }
+
+    .toast-container {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        z-index: 9999;
+    }
+
+    .alert-new {
+        animation: alertHighlight 3s ease-in-out;
+        border-left: 4px solid #28a745 !important;
+    }
+
+    @keyframes alertHighlight {
+        0% { background-color: rgba(40, 167, 69, 0.3); }
+        100% { background-color: transparent; }
+    }
 </style>
 {% endblock %}
 
@@ -312,7 +329,7 @@
             <div class="row g-3">
                 <div class="col-md-6 col-lg-4">
                     <label class="form-label">Check Interval (minutes)</label>
-                    <select id="interval-select" class="form-select" onchange="updateConfig()">
+                    <select id="interval-select" class="form-select">
                         <option value="5">5 minutes</option>
                         <option value="15">15 minutes</option>
                         <option value="30">30 minutes</option>
@@ -325,38 +342,38 @@
                 <div class="col-md-6 col-lg-4">
                     <label class="form-label">Networks</label>
                     <div class="form-check">
-                        <input class="form-check-input" type="checkbox" id="network-eth" onchange="updateConfig()">
+                        <input class="form-check-input" type="checkbox" id="network-eth">
                         <label class="form-check-label" for="network-eth">Ethereum</label>
                     </div>
                     <div class="form-check">
-                        <input class="form-check-input" type="checkbox" id="network-base" checked onchange="updateConfig()">
+                        <input class="form-check-input" type="checkbox" id="network-base" checked>
                         <label class="form-check-label" for="network-base">Base</label>
                     </div>
                 </div>
                 
                 <div class="col-md-6 col-lg-4">
                     <label class="form-label">Wallets to Check</label>
-                    <input type="number" id="num-wallets" value="50" min="5" max="174" class="form-control" onchange="updateConfig()">
+                    <input type="number" id="num-wallets" value="50" min="5" max="174" class="form-control">
                 </div>
                 
                 <div class="col-md-6 col-lg-4">
                     <label class="form-label">Min Wallets for Alert</label>
-                    <input type="number" id="min-wallets" value="2" min="1" max="20" class="form-control" onchange="updateThresholds()">
+                    <input type="number" id="min-wallets" value="2" min="1" max="20" class="form-control">
                 </div>
                 
                 <div class="col-md-6 col-lg-4">
                     <label class="form-label">Min ETH Spent</label>
-                    <input type="number" id="min-eth" value="0.5" step="0.1" min="0.1" class="form-control" onchange="updateThresholds()">
+                    <input type="number" id="min-eth" value="0.5" step="0.1" min="0.1" class="form-control">
                 </div>
                 
                 <div class="col-md-6 col-lg-4">
                     <label class="form-label">Min Alpha Score</label>
-                    <input type="number" id="min-score" value="30" min="10" max="100" class="form-control" onchange="updateThresholds()">
+                    <input type="number" id="min-score" value="30" min="10" max="100" class="form-control">
                 </div>
             </div>
             
             <div class="form-check mt-3">
-                <input class="form-check-input" type="checkbox" id="use-interval-timeframe" checked onchange="updateConfig()">
+                <input class="form-check-input" type="checkbox" id="use-interval-timeframe" checked>
                 <label class="form-check-label" for="use-interval-timeframe">
                     Only check new activity since last check (recommended)
                 </label>
@@ -376,15 +393,22 @@
         </div>
     </div>
 </div>
+
+<!-- Toast Container -->
+<div id="toast-container" class="toast-container"></div>
 {% endblock %}
 
 {% block scripts %}
 <script>
+// Complete JavaScript for monitor.html
 let isMonitorRunning = false;
 let autoScroll = true;
 let consolePaused = false;
 let consoleBuffer = [];
 let apiCallsInProgress = new Set();
+let alertRefreshInterval;
+let lastAlertCount = 0;
+let isRefreshing = false;
 
 // Enhanced API call function with better error handling
 async function makeApiCall(url, options = {}) {
@@ -406,7 +430,6 @@ async function makeApiCall(url, options = {}) {
         console.log(`[API] Response status: ${response.status} for ${url}`);
 
         if (!response.ok) {
-            // Get error text for better debugging
             let errorText = '';
             try {
                 errorText = await response.text();
@@ -417,13 +440,11 @@ async function makeApiCall(url, options = {}) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}. Response: ${errorText.substring(0, 200)}`);
         }
 
-        // Check if response is JSON
         const contentType = response.headers.get('content-type');
         if (!contentType || !contentType.includes('application/json')) {
             const text = await response.text();
             console.error(`[API] Non-JSON response from ${url}:`, text);
             
-            // Check if this is an HTML error page
             if (text.includes('<!DOCTYPE') || text.includes('<html')) {
                 throw new Error(`Server returned HTML error page instead of JSON. This usually indicates a server error or incorrect endpoint. Check server logs.`);
             }
@@ -438,7 +459,6 @@ async function makeApiCall(url, options = {}) {
     } catch (error) {
         console.error(`[API] Failed for ${url}:`, error);
         
-        // Enhanced error messages for common issues
         if (error.message.includes('Failed to fetch')) {
             error.message = `Network error: Could not connect to server. Check if the server is running on the correct port.`;
         } else if (error.message.includes('HTML error page')) {
@@ -459,7 +479,7 @@ function showApiError(endpoint, error, containerId = null) {
             ${error.message}<br>
             <small>
                 <strong>Troubleshooting:</strong><br>
-                • Check if the Flask server is running<br>
+                • Check if the FastAPI server is running<br>
                 • Verify the monitor endpoints are configured<br>
                 • Check server console for error details<br>
                 • Try refreshing the page<br>
@@ -480,26 +500,6 @@ function showApiError(endpoint, error, containerId = null) {
     log(`❌ API Error (${endpoint}): ${error.message}`, 'error');
 }
 
-// Retry function for failed API calls
-function retryApiCall(endpoint, containerId) {
-    log(`🔄 Retrying API call to ${endpoint}...`, 'info');
-    
-    switch (endpoint) {
-        case '/api/monitor/status':
-            loadStatus();
-            break;
-        case '/api/monitor/alerts':
-            loadAlerts();
-            break;
-        case '/api/monitor/config':
-            // Reload would be handled by loadStatus()
-            loadStatus();
-            break;
-        default:
-            log(`⚠️ Don't know how to retry ${endpoint}`, 'warning');
-    }
-}
-
 // Enhanced logging with different types and formatting
 function log(message, type = 'info', showTimestamp = true) {
     console.log(`[Monitor] ${message}`);
@@ -510,6 +510,8 @@ function log(message, type = 'info', showTimestamp = true) {
     }
     
     const output = document.getElementById('console-output');
+    if (!output) return;
+    
     const line = document.createElement('div');
     line.className = `console-line ${type}`;
     
@@ -546,194 +548,123 @@ function log(message, type = 'info', showTimestamp = true) {
     }
 }
 
-function logBanner(message) {
-    log('='.repeat(70), 'banner', false);
-    log(message, 'banner', false);
-    log('='.repeat(70), 'banner', false);
-}
-
-function logProgress(current, total, message) {
-    log(`🔄 [${current}/${total}] ${message}`, 'progress');
-}
-
-function logAlert(message) {
-    log(`🚨 ALERT: ${message}`, 'highlight');
-}
-
-function clearConsole() {
-    document.getElementById('console-output').innerHTML = '';
-    log('🚀 Monitor console ready. Click "Check Now" or "Start Monitor" to begin.');
-    log('💡 Tip: Console will show detailed progress when analysis runs');
-}
-
-function toggleAutoScroll() {
-    autoScroll = !autoScroll;
-    const toggleText = document.getElementById('scroll-toggle-text');
-    toggleText.textContent = `Auto Scroll: ${autoScroll ? 'ON' : 'OFF'}`;
+// Helper function to show toast notifications
+function showToast(message, type = 'info') {
+    const toastContainer = document.getElementById('toast-container');
+    if (!toastContainer) {
+        // Create toast container if it doesn't exist
+        const container = document.createElement('div');
+        container.id = 'toast-container';
+        container.className = 'toast-container position-fixed top-0 end-0 p-3';
+        container.style.zIndex = '9999';
+        document.body.appendChild(container);
+    }
     
-    const output = document.getElementById('console-output');
-    if (autoScroll) {
-        output.classList.add('auto-scroll');
-        output.scrollTop = output.scrollHeight;
+    const toastId = 'toast-' + Date.now();
+    const bgClass = type === 'success' ? 'bg-success' : type === 'error' ? 'bg-danger' : 'bg-primary';
+    
+    const toastHtml = `
+        <div id="${toastId}" class="toast align-items-center text-white ${bgClass} border-0" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="d-flex">
+                <div class="toast-body">
+                    ${message}
+                </div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+        </div>
+    `;
+    
+    document.getElementById('toast-container').insertAdjacentHTML('beforeend', toastHtml);
+    
+    const toastElement = document.getElementById(toastId);
+    if (window.bootstrap && window.bootstrap.Toast) {
+        const toast = new bootstrap.Toast(toastElement, { delay: 3000 });
+        toast.show();
+        
+        // Remove toast element after it's hidden
+        toastElement.addEventListener('hidden.bs.toast', () => {
+            toastElement.remove();
+        });
     } else {
-        output.classList.remove('auto-scroll');
+        // Fallback if Bootstrap is not available
+        setTimeout(() => {
+            toastElement.style.display = 'none';
+            setTimeout(() => toastElement.remove(), 500);
+        }, 3000);
     }
 }
 
-function pauseConsole() {
-    consolePaused = !consolePaused;
-    const pauseIcon = document.getElementById('pause-icon');
-    const pauseText = document.getElementById('pause-text');
+function startAlertRefresh() {
+    if (alertRefreshInterval) {
+        clearInterval(alertRefreshInterval);
+    }
     
-    if (consolePaused) {
-        pauseIcon.className = 'fas fa-play';
-        pauseText.textContent = 'Resume';
-        log('⏸️ Console output paused', 'warning');
-    } else {
-        pauseIcon.className = 'fas fa-pause';
-        pauseText.textContent = 'Pause';
-        log('▶️ Console output resumed', 'success');
-        
-        // Flush buffer
-        while (consoleBuffer.length > 0) {
-            const buffered = consoleBuffer.shift();
-            log(buffered.message, buffered.type, buffered.showTimestamp);
+    console.log('🔄 Starting alert auto-refresh');
+    
+    alertRefreshInterval = setInterval(async () => {
+        if (isMonitorRunning && !isRefreshing) {
+            try {
+                isRefreshing = true;
+                
+                // Get live updates
+                const updates = await makeApiCall('/api/monitor/live-updates');
+                
+                // Check if we have new alerts
+                const currentAlertCount = updates.stats?.total_alerts || 0;
+                if (currentAlertCount > lastAlertCount) {
+                    const newAlerts = currentAlertCount - lastAlertCount;
+                    log(`🔔 ${newAlerts} new alert(s) detected! Refreshing display...`, 'success');
+                    
+                    // Refresh the alerts display
+                    await loadAlerts();
+                    lastAlertCount = currentAlertCount;
+                    
+                    // Show toast notification
+                    showToast(`${newAlerts} new alert(s) found!`, 'success');
+                }
+                
+                // Update stats if needed
+                if (updates.stats) {
+                    const totalAlertsElement = document.getElementById('total-alerts');
+                    const knownTokensElement = document.getElementById('known-tokens');
+                    
+                    if (totalAlertsElement) {
+                        totalAlertsElement.textContent = updates.stats.total_alerts || 0;
+                    }
+                    if (knownTokensElement) {
+                        knownTokensElement.textContent = updates.stats.known_tokens || 0;
+                    }
+                }
+                
+                // Update current check status
+                if (updates.current_check) {
+                    const checkInfo = updates.current_check;
+                    log(`🔄 Analysis in progress: ${checkInfo.type} (${checkInfo.networks.join(', ')})`, 'progress');
+                }
+                
+            } catch (error) {
+                // Silently handle errors to avoid spam, but log them
+                console.debug('Live update failed:', error.message);
+            } finally {
+                isRefreshing = false;
+            }
         }
-    }
+    }, 3000); // Check every 3 seconds when monitor is running
 }
 
-function exportConsoleLog() {
-    const output = document.getElementById('console-output');
-    const lines = Array.from(output.children).map(line => line.textContent).join('\n');
-    
-    const blob = new Blob([lines], { type: 'text/plain' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `monitor-log-${new Date().toISOString().split('T')[0]}.txt`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
-    
-    log('📁 Console log exported successfully', 'success');
-}
-
-// Load monitor status on page load
-window.addEventListener('DOMContentLoaded', function() {
-    log('🌐 Page loaded, initializing monitor interface...');
-    
-    // Show loading state
-    showLoadingState();
-    
-    // Start loading data with better error handling
-    initializeMonitorPage();
-    
-    // Start polling for real-time updates when monitor is running
-    setInterval(pollMonitorOutput, 2000);
-});
-
-function showLoadingState() {
-    const elements = {
-        'status-text': 'Loading status...',
-        'monitor-status': 'Loading...',
-        'last-check': 'Loading...',
-        'next-check': 'Loading...',
-        'total-alerts': '...',
-        'known-tokens': '...'
-    };
-    
-    Object.entries(elements).forEach(([id, text]) => {
-        const element = document.getElementById(id);
-        if (element) {
-            element.textContent = text;
-        }
-    });
-}
-
-async function initializeMonitorPage() {
-    log('🔧 Initializing monitor page...', 'info');
-    
-    try {
-        // Test basic connectivity first
-        await testBasicConnectivity();
-        
-        // Load all components
-        await Promise.allSettled([
-            loadStatus(),
-            loadAlerts()
-        ]);
-        
-        log('✅ Monitor page initialized successfully', 'success');
-        
-    } catch (error) {
-        log(`❌ Failed to initialize monitor page: ${error.message}`, 'error');
-        showApiError('initialization', error);
-    }
-}
-
-async function testBasicConnectivity() {
-    log('🔌 Testing basic server connectivity...', 'info');
-    
-    try {
-        // Test the simplest endpoint first
-        const response = await fetch('/api/status');
-        
-        if (!response.ok) {
-            throw new Error(`Server responded with ${response.status}: ${response.statusText}`);
-        }
-        
-        const data = await response.json();
-        log('✅ Server connectivity test passed', 'success');
-        
-        return data;
-        
-    } catch (error) {
-        log(`❌ Server connectivity test failed: ${error.message}`, 'error');
-        throw new Error(`Cannot connect to server: ${error.message}`);
-    }
-}
-
-function pollMonitorOutput() {
-    if (isMonitorRunning) {
-        // This would connect to a real-time endpoint if available
-        // For now, we'll just refresh status periodically
-        loadStatus();
-    }
-}
-
-async function loadStatus() {
-    try {
-        log('📡 Loading monitor status...', 'info');
-        const data = await makeApiCall('/api/monitor/status');
-        
-        updateUI(data);
-        
-        // Show stats
-        if (data.data && data.data.stats) {
-            document.getElementById('total-alerts').textContent = data.data.stats.total_alerts || 0;
-            document.getElementById('known-tokens').textContent = data.data.stats.known_tokens || 0;
-        } else if (data.stats) {
-            document.getElementById('total-alerts').textContent = data.stats.total_alerts || 0;
-            document.getElementById('known-tokens').textContent = data.stats.known_tokens || 0;
-        }
-        
-        log('✅ Monitor status loaded successfully', 'success');
-        
-    } catch (error) {
-        showApiError('/api/monitor/status', error);
-        
-        // Set default values when API fails
-        document.getElementById('status-text').textContent = 'Status unavailable';
-        document.getElementById('monitor-status').textContent = 'Unknown';
-        document.getElementById('monitor-status').className = 'badge bg-danger';
+function stopAlertRefresh() {
+    if (alertRefreshInterval) {
+        clearInterval(alertRefreshInterval);
+        alertRefreshInterval = null;
+        console.log('🛑 Stopped alert auto-refresh');
     }
 }
 
 function updateUI(response) {
     // Handle both direct data and wrapped responses
     const status = response.data || response;
-    
+    console.log('🔄 Status updated:', status);
+
     const indicator = document.getElementById('status-indicator');
     const statusText = document.getElementById('status-text');
     const startBtn = document.getElementById('start-btn');
@@ -744,33 +675,49 @@ function updateUI(response) {
     isMonitorRunning = status.is_running;
     
     if (isMonitorRunning) {
-        indicator.classList.add('active');
-        statusText.textContent = 'Monitor Active';
-        monitorStatus.className = 'badge bg-success';
-        monitorStatus.textContent = 'Active';
-        consoleStatus.style.display = 'inline-block';
-        startBtn.style.display = 'none';
-        stopBtn.style.display = 'inline-block';
+        if (indicator) indicator.classList.add('active');
+        if (statusText) statusText.textContent = 'Monitor Active';
+        if (monitorStatus) {
+            monitorStatus.className = 'badge bg-success';
+            monitorStatus.textContent = 'Active';
+        }
+        if (consoleStatus) consoleStatus.style.display = 'inline-block';
+        if (startBtn) startBtn.style.display = 'none';
+        if (stopBtn) stopBtn.style.display = 'inline-block';
         
-        log('✅ Monitor is running', 'success');
+        // Start auto-refresh when monitor is active
+        startAlertRefresh();
+        log('✅ Monitor is running - auto-refresh enabled', 'success');
     } else {
-        indicator.classList.remove('active');
-        statusText.textContent = 'Monitor Inactive';
-        monitorStatus.className = 'badge bg-secondary';
-        monitorStatus.textContent = 'Inactive';
-        consoleStatus.style.display = 'none';
-        startBtn.style.display = 'inline-block';
-        stopBtn.style.display = 'none';
+        if (indicator) indicator.classList.remove('active');
+        if (statusText) statusText.textContent = 'Monitor Inactive';
+        if (monitorStatus) {
+            monitorStatus.className = 'badge bg-secondary';
+            monitorStatus.textContent = 'Inactive';
+        }
+        if (consoleStatus) consoleStatus.style.display = 'none';
+        if (startBtn) startBtn.style.display = 'inline-block';
+        if (stopBtn) stopBtn.style.display = 'none';
+        
+        // Stop auto-refresh when monitor is inactive
+        stopAlertRefresh();
+        log('🛑 Monitor stopped - auto-refresh disabled', 'info');
     }
     
     if (status.last_check) {
         const lastCheck = new Date(status.last_check);
-        document.getElementById('last-check').textContent = lastCheck.toLocaleTimeString();
+        const lastCheckElement = document.getElementById('last-check');
+        if (lastCheckElement) {
+            lastCheckElement.textContent = lastCheck.toLocaleTimeString();
+        }
     }
     
     if (status.next_check && isMonitorRunning) {
         const nextCheck = new Date(status.next_check);
-        document.getElementById('next-check').textContent = nextCheck.toLocaleTimeString();
+        const nextCheckElement = document.getElementById('next-check');
+        if (nextCheckElement) {
+            nextCheckElement.textContent = nextCheck.toLocaleTimeString();
+        }
         
         // Calculate time until next check
         const now = new Date();
@@ -781,211 +728,99 @@ function updateUI(response) {
             log(`⏰ Next check in ${minutes}m ${seconds}s`, 'info');
         }
     } else {
-        document.getElementById('next-check').textContent = '-';
+        const nextCheckElement = document.getElementById('next-check');
+        if (nextCheckElement) {
+            nextCheckElement.textContent = '-';
+        }
     }
     
-    // Update config fields
+    // Only update config fields if they don't have focus (to avoid overriding user input)
     if (status.config) {
-        document.getElementById('interval-select').value = status.config.check_interval_minutes || 60;
-        document.getElementById('num-wallets').value = status.config.num_wallets || 50;
-        document.getElementById('use-interval-timeframe').checked = status.config.use_interval_for_timeframe !== false;
+        const intervalSelect = document.getElementById('interval-select');
+        const numWallets = document.getElementById('num-wallets');
+        const useIntervalTimeframe = document.getElementById('use-interval-timeframe');
+        const networkEth = document.getElementById('network-eth');
+        const networkBase = document.getElementById('network-base');
         
-        // Update network checkboxes
+        // Only update if the element doesn't have focus (user isn't currently editing)
+        if (intervalSelect && document.activeElement !== intervalSelect) {
+            intervalSelect.value = status.config.check_interval_minutes || 60;
+        }
+        if (numWallets && document.activeElement !== numWallets) {
+            numWallets.value = status.config.num_wallets || 50;
+        }
+        if (useIntervalTimeframe && document.activeElement !== useIntervalTimeframe) {
+            useIntervalTimeframe.checked = status.config.use_interval_for_timeframe !== false;
+        }
+        
+        // Update network checkboxes (these are less likely to be actively edited)
         if (status.config.networks) {
-            document.getElementById('network-eth').checked = status.config.networks.includes('ethereum');
-            document.getElementById('network-base').checked = status.config.networks.includes('base');
-        }
-    }
-    
-    // Update thresholds
-    if (status.alert_thresholds) {
-        document.getElementById('min-wallets').value = status.alert_thresholds.min_wallets || 2;
-        document.getElementById('min-eth').value = status.alert_thresholds.min_eth_total || 0.5;
-        document.getElementById('min-score').value = status.alert_thresholds.min_alpha_score || 30;
-    }
-}
-
-async function startMonitor() {
-    logBanner('🚀 STARTING CRYPTO MONITOR');
-    log('📡 Sending start request to server...', 'info');
-    
-    try {
-        const data = await makeApiCall('/api/monitor/start', { method: 'POST' });
-        
-        if (data.status === 'success') {
-            log('✅ Monitor started successfully!', 'success');
-            log('🔄 Monitor will now check for new tokens automatically', 'info');
-            log(`⏰ Check interval: ${data.config ? data.config.check_interval_minutes : 'Unknown'} minutes`, 'info');
-        } else {
-            log(`❌ Failed to start monitor: ${data.message}`, 'error');
-        }
-        loadStatus();
-    } catch (error) {
-        log(`❌ Error starting monitor: ${error.message}`, 'error');
-    }
-}
-
-async function stopMonitor() {
-    logBanner('🛑 STOPPING CRYPTO MONITOR');
-    log('📡 Sending stop request to server...', 'info');
-    
-    try {
-        const data = await makeApiCall('/api/monitor/stop', { method: 'POST' });
-        
-        if (data.status === 'success') {
-            log('✅ Monitor stopped successfully', 'success');
-        } else {
-            log(`❌ Failed to stop monitor: ${data.message}`, 'error');
-        }
-        loadStatus();
-    } catch (error) {
-        log(`❌ Error stopping monitor: ${error.message}`, 'error');
-    }
-}
-
-async function checkNow() {
-    logBanner('🔍 IMMEDIATE CHECK INITIATED');
-    log('🚀 Starting immediate token analysis...', 'warning');
-    log('📊 This will analyze recent wallet activity for new tokens', 'info');
-    log('⏳ Please wait... Check will run in background', 'info');
-    log('💡 Detailed progress will appear in server console', 'info');
-    
-    try {
-        const data = await makeApiCall('/api/monitor/check-now', { method: 'POST' });
-        
-        if (data.status === 'success') {
-            log('✅ Immediate check initiated successfully!', 'success');
-            log('🔍 Analysis running... Results will appear shortly', 'info');
-            
-            // Simulate progress updates (since we don't have real-time SSE here)
-            setTimeout(() => log('📊 Analyzing wallet transactions...', 'progress'), 2000);
-            setTimeout(() => log('🔍 Checking for new token activity...', 'progress'), 5000);
-            setTimeout(() => log('📈 Calculating alpha scores...', 'progress'), 8000);
-            setTimeout(() => {
-                log('✅ Analysis complete! Loading results...', 'success');
-                loadAlerts();
-                loadStatus();
-            }, 12000);
-        } else {
-            log(`❌ Check failed: ${data.message}`, 'error');
-        }
-    } catch (error) {
-        log(`❌ Error running immediate check: ${error.message}`, 'error');
-    }
-}
-
-async function testConnection() {
-    log('🔌 Testing monitor connections...', 'info');
-    log('📡 Checking API endpoints and database connectivity', 'info');
-    
-    try {
-        const data = await makeApiCall('/api/monitor/test');
-        
-        if (data.status === 'success') {
-            log('✅ Connection test passed!', 'success');
-            log(`📊 Test results: ${JSON.stringify(data.results)}`, 'info');
-            
-            // Display individual test results
-            if (data.results) {
-                Object.entries(data.results).forEach(([test, result]) => {
-                    const status = result ? '✅' : '❌';
-                    log(`  ${status} ${test}: ${result ? 'OK' : 'FAILED'}`, result ? 'success' : 'error');
-                });
+            if (networkEth && document.activeElement !== networkEth) {
+                networkEth.checked = status.config.networks.includes('ethereum');
             }
-        } else {
-            log(`❌ Connection test failed: ${data.message}`, 'error');
+            if (networkBase && document.activeElement !== networkBase) {
+                networkBase.checked = status.config.networks.includes('base');
+            }
         }
-    } catch (error) {
-        log(`❌ Connection test error: ${error.message}`, 'error');
     }
-}
-
-async function updateConfig() {
-    const networks = [];
-    if (document.getElementById('network-eth').checked) networks.push('ethereum');
-    if (document.getElementById('network-base').checked) networks.push('base');
     
-    const config = {
-        check_interval_minutes: parseInt(document.getElementById('interval-select').value),
-        networks: networks,
-        num_wallets: parseInt(document.getElementById('num-wallets').value),
-        use_interval_for_timeframe: document.getElementById('use-interval-timeframe').checked
-    };
-    
-    log(`⚙️ Updating configuration...`, 'info');
-    log(`📊 New settings: ${networks.join(', ')} networks, ${config.num_wallets} wallets, ${config.check_interval_minutes}min interval`, 'info');
-    
-    try {
-        const data = await makeApiCall('/api/monitor/config', {
-            method: 'POST',
-            body: JSON.stringify(config)
-        });
+    // Only update threshold fields if they don't have focus
+    if (status.alert_thresholds) {
+        const minWallets = document.getElementById('min-wallets');
+        const minEth = document.getElementById('min-eth');
+        const minScore = document.getElementById('min-score');
         
-        if (data.status === 'success') {
-            log('✅ Configuration updated successfully', 'success');
-            loadStatus();
-        } else {
-            log(`❌ Config update failed: ${data.message}`, 'error');
+        if (minWallets && document.activeElement !== minWallets) {
+            minWallets.value = status.alert_thresholds.min_wallets || 2;
         }
-    } catch (error) {
-        log(`❌ Error updating config: ${error.message}`, 'error');
+        if (minEth && document.activeElement !== minEth) {
+            minEth.value = status.alert_thresholds.min_eth_total || 0.5;
+        }
+        if (minScore && document.activeElement !== minScore) {
+            minScore.value = status.alert_thresholds.min_alpha_score || 30;
+        }
     }
 }
 
-async function updateThresholds() {
-    const thresholds = {
-        min_wallets: parseInt(document.getElementById('min-wallets').value),
-        min_eth_total: parseFloat(document.getElementById('min-eth').value),
-        min_alpha_score: parseFloat(document.getElementById('min-score').value)
-    };
-    
-    log(`🎯 Updating alert thresholds...`, 'info');
-    log(`📊 New thresholds: ${thresholds.min_wallets} wallets, ${thresholds.min_eth_total} ETH, α≥${thresholds.min_alpha_score}`, 'info');
-    
-    try {
-        const data = await makeApiCall('/api/monitor/thresholds', {
-            method: 'POST',
-            body: JSON.stringify(thresholds)
-        });
-        
-        if (data.status === 'success') {
-            log('✅ Alert thresholds updated successfully', 'success');
-        } else {
-            log(`❌ Threshold update failed: ${data.message}`, 'error');
-        }
-    } catch (error) {
-        log(`❌ Error updating thresholds: ${error.message}`, 'error');
-    }
-}
-
+// Enhanced loadAlerts function
 async function loadAlerts() {
     try {
         log('📋 Loading recent alerts...', 'info');
         const alerts = await makeApiCall('/api/monitor/alerts?limit=20');
         
         const container = document.getElementById('alerts-container');
+        if (!container) return;
         
         if (!alerts || alerts.length === 0) {
             container.innerHTML = '<p class="text-muted">No alerts yet. Start monitoring or run an immediate check to generate alerts.</p>';
         } else {
-            log(`📋 Loading ${alerts.length} recent alerts`, 'info');
+            log(`📋 Displaying ${alerts.length} recent alerts`, 'info');
             
             let html = '';
-            alerts.reverse().forEach(alert => {  // Show newest first
+            alerts.forEach((alert, index) => {
                 const alertClass = getAlertClass(alert);
                 const alertEmoji = getAlertEmoji(alert);
                 const confidenceBadge = getConfidenceBadge(alert);
                 const networkBadge = alert.network ? `<span class="badge bg-info ms-2">${alert.network.toUpperCase()}</span>` : '';
                 
+                // Get the correct score based on alert type
+                const score = alert.data?.alpha_score || alert.data?.sell_score || 0;
+                
+                // Get ETH value based on alert type
+                const ethValue = alert.data?.total_eth_spent || alert.data?.total_eth_value || 0;
+                
+                // Animation class for new alerts
+                const isNewAlert = index < 3 ? 'alert-new' : '';
+                
                 html += `
-                    <div class="alert-item ${alertClass}">
+                    <div class="alert-item ${alertClass} ${isNewAlert}">
                         <div class="alert-token">
                             ${alertEmoji} ${alert.token} ${networkBadge} ${confidenceBadge}
                         </div>
                         <div class="row g-2 mb-2">
                             <div class="col-md-3">
-                                <small class="text-muted">ETH Spent:</small>
-                                <div class="fw-bold text-success">${(alert.data?.total_eth_spent || 0).toFixed(3)} ETH</div>
+                                <small class="text-muted">ETH Value:</small>
+                                <div class="fw-bold text-success">${ethValue.toFixed(4)} ETH</div>
                             </div>
                             <div class="col-md-3">
                                 <small class="text-muted">Wallets:</small>
@@ -993,7 +828,7 @@ async function loadAlerts() {
                             </div>
                             <div class="col-md-3">
                                 <small class="text-muted">Score:</small>
-                                <div class="fw-bold text-warning">${(alert.data?.alpha_score || alert.data?.sell_score || 0).toFixed(0)}</div>
+                                <div class="fw-bold text-warning">${score.toFixed(1)}</div>
                             </div>
                             <div class="col-md-3">
                                 <small class="text-muted">Activity:</small>
@@ -1020,6 +855,23 @@ async function loadAlerts() {
             });
             
             container.innerHTML = html;
+            
+            // Add CSS for new alert animation if not exists
+            if (!document.getElementById('alert-animation-css')) {
+                const style = document.createElement('style');
+                style.id = 'alert-animation-css';
+                style.textContent = `
+                    .alert-new {
+                        animation: alertHighlight 3s ease-in-out;
+                        border-left: 4px solid #28a745 !important;
+                    }
+                    @keyframes alertHighlight {
+                        0% { background-color: rgba(40, 167, 69, 0.3); }
+                        100% { background-color: transparent; }
+                    }
+                `;
+                document.head.appendChild(style);
+            }
         }
         
         log('✅ Alerts loaded successfully', 'success');
@@ -1029,6 +881,7 @@ async function loadAlerts() {
     }
 }
 
+// Utility functions for alert display
 function getAlertClass(alert) {
     if (alert.confidence === 'HIGH') return 'high-confidence';
     if (alert.confidence === 'MEDIUM') return 'medium-confidence';
@@ -1061,96 +914,530 @@ function getConfidenceBadge(alert) {
     return `<span class="badge ${colors[confidence]} ms-2">${emojis[confidence]} ${confidence}</span>`;
 }
 
-// Auto-refresh status every 30 seconds when monitor is running
+// Monitor control functions
+async function loadStatus() {
+    try {
+        log('📡 Loading monitor status...', 'info');
+        const data = await makeApiCall('/api/monitor/status');
+        
+        updateUI(data);
+        
+        // Show stats
+        if (data.data && data.data.stats) {
+            const totalAlertsElement = document.getElementById('total-alerts');
+            const knownTokensElement = document.getElementById('known-tokens');
+            
+            if (totalAlertsElement) totalAlertsElement.textContent = data.data.stats.total_alerts || 0;
+            if (knownTokensElement) knownTokensElement.textContent = data.data.stats.known_tokens || 0;
+        } else if (data.stats) {
+            const totalAlertsElement = document.getElementById('total-alerts');
+            const knownTokensElement = document.getElementById('known-tokens');
+            
+            if (totalAlertsElement) totalAlertsElement.textContent = data.stats.total_alerts || 0;
+            if (knownTokensElement) knownTokensElement.textContent = data.stats.known_tokens || 0;
+        }
+        
+        log('✅ Monitor status loaded successfully', 'success');
+        
+    } catch (error) {
+        showApiError('/api/monitor/status', error);
+        
+        // Set default values when API fails
+        const statusText = document.getElementById('status-text');
+        const monitorStatus = document.getElementById('monitor-status');
+        
+        if (statusText) statusText.textContent = 'Status unavailable';
+        if (monitorStatus) {
+            monitorStatus.textContent = 'Unknown';
+            monitorStatus.className = 'badge bg-danger';
+        }
+    }
+}
+
+async function startMonitor() {
+    log('🚀 Starting crypto monitor...', 'info');
+    log('📡 Sending start request to server...', 'info');
+    
+    try {
+        const data = await makeApiCall('/api/monitor/start', { method: 'POST' });
+        
+        if (data.status === 'success') {
+            log('✅ Monitor started successfully!', 'success');
+            log('🔄 Monitor will now check for new tokens automatically', 'info');
+            log(`⏰ Check interval: ${data.config ? data.config.check_interval_minutes : 'Unknown'} minutes`, 'info');
+            showToast('Monitor started successfully!', 'success');
+        } else {
+            log(`❌ Failed to start monitor: ${data.message}`, 'error');
+            showToast('Failed to start monitor', 'error');
+        }
+        loadStatus();
+    } catch (error) {
+        log(`❌ Error starting monitor: ${error.message}`, 'error');
+        showToast('Error starting monitor', 'error');
+    }
+}
+
+async function stopMonitor() {
+    log('🛑 Stopping crypto monitor...', 'info');
+    log('📡 Sending stop request to server...', 'info');
+    
+    try {
+        const data = await makeApiCall('/api/monitor/stop', { method: 'POST' });
+        
+        if (data.status === 'success') {
+            log('✅ Monitor stopped successfully', 'success');
+            showToast('Monitor stopped', 'success');
+        } else {
+            log(`❌ Failed to stop monitor: ${data.message}`, 'error');
+            showToast('Failed to stop monitor', 'error');
+        }
+        loadStatus();
+    } catch (error) {
+        log(`❌ Error stopping monitor: ${error.message}`, 'error');
+        showToast('Error stopping monitor', 'error');
+    }
+}
+
+async function checkNow() {
+    log('🔍 Starting immediate check...', 'warning');
+    log('🚀 This will analyze recent wallet activity for new tokens', 'info');
+    log('⏳ Please wait... Check will run in background', 'info');
+    
+    try {
+        const data = await makeApiCall('/api/monitor/check-now', { method: 'POST' });
+        
+        if (data.status === 'success') {
+            log('✅ Immediate check initiated successfully!', 'success');
+            log('🔍 Analysis running... Results will appear shortly', 'info');
+            showToast('Analysis started!', 'success');
+            
+            // Simulate progress updates
+            setTimeout(() => log('📊 Analyzing wallet transactions...', 'progress'), 2000);
+            setTimeout(() => log('🔍 Checking for new token activity...', 'progress'), 5000);
+            setTimeout(() => log('📈 Calculating scores...', 'progress'), 8000);
+            setTimeout(() => {
+                log('✅ Analysis complete! Loading results...', 'success');
+                loadAlerts();
+                loadStatus();
+            }, 12000);
+        } else {
+            log(`❌ Check failed: ${data.message}`, 'error');
+            showToast('Check failed', 'error');
+        }
+    } catch (error) {
+        log(`❌ Error running immediate check: ${error.message}`, 'error');
+        showToast('Error running check', 'error');
+    }
+}
+
+async function testConnection() {
+    log('🔌 Testing monitor connections...', 'info');
+    log('📡 Checking API endpoints and database connectivity', 'info');
+    
+    try {
+        const data = await makeApiCall('/api/monitor/test');
+        
+        if (data.status === 'success') {
+            log('✅ Connection test passed!', 'success');
+            log(`📊 Test results: ${JSON.stringify(data.results)}`, 'info');
+            showToast('Connection test passed!', 'success');
+            
+            // Display individual test results
+            if (data.results) {
+                Object.entries(data.results).forEach(([test, result]) => {
+                    const status = result ? '✅' : '❌';
+                    log(`  ${status} ${test}: ${result ? 'OK' : 'FAILED'}`, result ? 'success' : 'error');
+                });
+            }
+        } else {
+            log(`❌ Connection test failed: ${data.message}`, 'error');
+            showToast('Connection test failed', 'error');
+        }
+    } catch (error) {
+        log(`❌ Connection test error: ${error.message}`, 'error');
+        showToast('Connection test error', 'error');
+    }
+}
+
+// Console functions
+function clearConsole() {
+    const output = document.getElementById('console-output');
+    if (output) {
+        output.innerHTML = '';
+        log('🚀 Monitor console ready. Click "Check Now" or "Start Monitor" to begin.');
+        log('💡 Tip: Console will show detailed progress when analysis runs');
+    }
+}
+
+function toggleAutoScroll() {
+    autoScroll = !autoScroll;
+    const toggleText = document.getElementById('scroll-toggle-text');
+    if (toggleText) {
+        toggleText.textContent = `Auto Scroll: ${autoScroll ? 'ON' : 'OFF'}`;
+    }
+    
+    const output = document.getElementById('console-output');
+    if (output) {
+        if (autoScroll) {
+            output.classList.add('auto-scroll');
+            output.scrollTop = output.scrollHeight;
+        } else {
+            output.classList.remove('auto-scroll');
+        }
+    }
+}
+
+// Configuration functions
+async function updateConfig() {
+    const networks = [];
+    const networkEth = document.getElementById('network-eth');
+    const networkBase = document.getElementById('network-base');
+    
+    if (networkEth && networkEth.checked) networks.push('ethereum');
+    if (networkBase && networkBase.checked) networks.push('base');
+    
+    const intervalSelect = document.getElementById('interval-select');
+    const numWallets = document.getElementById('num-wallets');
+    const useIntervalTimeframe = document.getElementById('use-interval-timeframe');
+    
+    const config = {
+        check_interval_minutes: parseInt(intervalSelect?.value || 60),
+        networks: networks,
+        num_wallets: parseInt(numWallets?.value || 50),
+        use_interval_for_timeframe: useIntervalTimeframe?.checked !== false
+    };
+    
+    // Validate configuration
+    if (networks.length === 0) {
+        showToast('Please select at least one network', 'error');
+        return;
+    }
+    
+    if (config.num_wallets < 5 || config.num_wallets > 174) {
+        showToast('Number of wallets must be between 5 and 174', 'error');
+        return;
+    }
+    
+    log(`⚙️ Updating configuration...`, 'info');
+    log(`📊 New settings: ${networks.join(', ')} networks, ${config.num_wallets} wallets, ${config.check_interval_minutes}min interval`, 'info');
+    
+    // Show visual feedback
+    showConfigurationStatus('updating');
+    
+    try {
+        const data = await makeApiCall('/api/monitor/config', {
+            method: 'POST',
+            body: JSON.stringify(config)
+        });
+        
+        if (data.status === 'success') {
+            log('✅ Configuration updated successfully', 'success');
+            showToast('Configuration updated successfully', 'success');
+            showConfigurationStatus('success');
+            
+            // Don't reload status immediately to avoid overriding user changes
+            setTimeout(() => loadStatus(), 10000);
+        } else {
+            log(`❌ Config update failed: ${data.message}`, 'error');
+            showToast(`Config update failed: ${data.message}`, 'error');
+            showConfigurationStatus('error');
+        }
+    } catch (error) {
+        log(`❌ Error updating config: ${error.message}`, 'error');
+        showToast('Error updating configuration', 'error');
+        showConfigurationStatus('error');
+    }
+}
+
+async function updateThresholds() {
+    const minWallets = document.getElementById('min-wallets');
+    const minEth = document.getElementById('min-eth');
+    const minScore = document.getElementById('min-score');
+    
+    const thresholds = {
+        min_wallets: parseInt(minWallets?.value || 2),
+        min_eth_total: parseFloat(minEth?.value || 0.5),
+        min_alpha_score: parseFloat(minScore?.value || 30),
+        min_sell_score: 25.0,
+        min_transactions: 3,
+        filter_stablecoins: true
+    };
+    
+    // Validate thresholds
+    if (thresholds.min_wallets < 1 || thresholds.min_wallets > 20) {
+        showToast('Min wallets must be between 1 and 20', 'error');
+        return;
+    }
+    
+    if (thresholds.min_eth_total < 0.01 || thresholds.min_eth_total > 100) {
+        showToast('Min ETH must be between 0.01 and 100', 'error');
+        return;
+    }
+    
+    if (thresholds.min_alpha_score < 10 || thresholds.min_alpha_score > 100) {
+        showToast('Min alpha score must be between 10 and 100', 'error');
+        return;
+    }
+    
+    log(`🎯 Updating alert thresholds...`, 'info');
+    log(`📊 New thresholds: ${thresholds.min_wallets} wallets, ${thresholds.min_eth_total} ETH, α≥${thresholds.min_alpha_score}`, 'info');
+    
+    // Show visual feedback
+    showThresholdStatus('updating');
+    
+    try {
+        const data = await makeApiCall('/api/monitor/thresholds', {
+            method: 'POST',
+            body: JSON.stringify(thresholds)
+        });
+        
+        if (data.status === 'success') {
+            log('✅ Alert thresholds updated successfully', 'success');
+            showToast('Alert thresholds updated successfully', 'success');
+            showThresholdStatus('success');
+        } else {
+            log(`❌ Threshold update failed: ${data.message}`, 'error');
+            showToast(`Threshold update failed: ${data.message}`, 'error');
+            showThresholdStatus('error');
+        }
+    } catch (error) {
+        log(`❌ Error updating thresholds: ${error.message}`, 'error');
+        showToast('Error updating thresholds', 'error');
+        showThresholdStatus('error');
+    }
+}
+
+// Visual feedback functions for configuration updates
+function showConfigurationStatus(status) {
+    const configSection = document.querySelector('.crypto-card h3');
+    if (!configSection || !configSection.textContent.includes('Configuration')) return;
+    
+    // Remove existing status indicators
+    const existingIndicator = configSection.querySelector('.config-status');
+    if (existingIndicator) {
+        existingIndicator.remove();
+    }
+    
+    let indicator = '';
+    switch (status) {
+        case 'updating':
+            indicator = '<span class="config-status badge bg-warning ms-2">Updating...</span>';
+            break;
+        case 'success':
+            indicator = '<span class="config-status badge bg-success ms-2">✓ Saved</span>';
+            setTimeout(() => showConfigurationStatus('clear'), 3000);
+            break;
+        case 'error':
+            indicator = '<span class="config-status badge bg-danger ms-2">✗ Error</span>';
+            setTimeout(() => showConfigurationStatus('clear'), 5000);
+            break;
+        case 'clear':
+            return;
+    }
+    
+    configSection.insertAdjacentHTML('beforeend', indicator);
+}
+
+function showThresholdStatus(status) {
+    // Find threshold labels and add status indicators
+    const labels = document.querySelectorAll('label');
+    let thresholdLabel = null;
+    
+    for (const label of labels) {
+        if (label.textContent.includes('Min Wallets') || label.textContent.includes('Min ETH') || label.textContent.includes('Min Alpha')) {
+            thresholdLabel = label.closest('.crypto-card')?.querySelector('h3');
+            break;
+        }
+    }
+    
+    if (!thresholdLabel) return;
+    
+    // Remove existing status indicators
+    const existingIndicator = thresholdLabel.querySelector('.threshold-status');
+    if (existingIndicator) {
+        existingIndicator.remove();
+    }
+    
+    let indicator = '';
+    switch (status) {
+        case 'updating':
+            indicator = '<span class="threshold-status badge bg-warning ms-2">Updating...</span>';
+            break;
+        case 'success':
+            indicator = '<span class="threshold-status badge bg-success ms-2">✓ Saved</span>';
+            setTimeout(() => showThresholdStatus('clear'), 3000);
+            break;
+        case 'error':
+            indicator = '<span class="threshold-status badge bg-danger ms-2">✗ Error</span>';
+            setTimeout(() => showThresholdStatus('clear'), 5000);
+            break;
+        case 'clear':
+            return;
+    }
+    
+    thresholdLabel.insertAdjacentHTML('beforeend', indicator);
+}
+
+// Initialize the monitor page
+function initializeMonitorPage() {
+    log('🌐 Page loaded, initializing monitor interface...');
+    
+    // Start loading data
+    loadStatus().then(() => {
+        loadAlerts();
+        log('✅ Monitor page initialized successfully', 'success');
+        
+        // Get initial alert count
+        setTimeout(async () => {
+            try {
+                const updates = await makeApiCall('/api/monitor/live-updates');
+                lastAlertCount = updates.stats?.total_alerts || 0;
+                console.log(`📊 Initial alert count: ${lastAlertCount}`);
+            } catch (error) {
+                console.debug('Could not get initial alert count:', error);
+            }
+        }, 2000);
+    }).catch(error => {
+        log(`❌ Failed to initialize monitor page: ${error.message}`, 'error');
+    });
+}
+
+// Setup event listeners for configuration form elements
+function setupConfigurationEventListeners() {
+    // Configuration section event listeners
+    const intervalSelect = document.getElementById('interval-select');
+    const networkEth = document.getElementById('network-eth');
+    const networkBase = document.getElementById('network-base');
+    const numWallets = document.getElementById('num-wallets');
+    const useIntervalTimeframe = document.getElementById('use-interval-timeframe');
+    
+    // Threshold section event listeners
+    const minWallets = document.getElementById('min-wallets');
+    const minEth = document.getElementById('min-eth');
+    const minScore = document.getElementById('min-score');
+    
+    // Add change event listeners for configuration
+    if (intervalSelect) intervalSelect.addEventListener('change', updateConfig);
+    if (networkEth) networkEth.addEventListener('change', updateConfig);
+    if (networkBase) networkBase.addEventListener('change', updateConfig);
+    if (numWallets) numWallets.addEventListener('change', updateConfig);
+    if (useIntervalTimeframe) useIntervalTimeframe.addEventListener('change', updateConfig);
+    
+    // Add change event listeners for thresholds
+    if (minWallets) minWallets.addEventListener('change', updateThresholds);
+    if (minEth) minEth.addEventListener('change', updateThresholds);
+    if (minScore) minScore.addEventListener('change', updateThresholds);
+    
+    // Add input event listeners for number inputs (for real-time updates)
+    if (numWallets) numWallets.addEventListener('input', debounce(updateConfig, 1000));
+    if (minWallets) minWallets.addEventListener('input', debounce(updateThresholds, 1000));
+    if (minEth) minEth.addEventListener('input', debounce(updateThresholds, 1000));
+    if (minScore) minScore.addEventListener('input', debounce(updateThresholds, 1000));
+    
+    console.log('✅ Configuration event listeners setup complete');
+}
+
+// Debounce function to prevent too many API calls
+function debounce(func, delay) {
+    let timeoutId;
+    return function (...args) {
+        clearTimeout(timeoutId);
+        timeoutId = setTimeout(() => func.apply(this, args), delay);
+    };
+}
+
+// Additional utility functions
+function retryApiCall(endpoint, containerId) {
+    log(`🔄 Retrying API call to ${endpoint}...`, 'info');
+    
+    switch (endpoint) {
+        case '/api/monitor/status':
+            loadStatus();
+            break;
+        case '/api/monitor/alerts':
+            loadAlerts();
+            break;
+        case '/api/monitor/config':
+            loadStatus();
+            break;
+        default:
+            log(`⚠️ Don't know how to retry ${endpoint}`, 'warning');
+    }
+}
+
+function exportConsoleLog() {
+    const output = document.getElementById('console-output');
+    if (!output) return;
+    
+    const lines = Array.from(output.children).map(line => line.textContent).join('\n');
+    
+    const blob = new Blob([lines], { type: 'text/plain' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `monitor-log-${new Date().toISOString().split('T')[0]}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+    
+    log('📁 Console log exported successfully', 'success');
+}
+
+function pauseConsole() {
+    consolePaused = !consolePaused;
+    const pauseIcon = document.getElementById('pause-icon');
+    const pauseText = document.getElementById('pause-text');
+    
+    if (pauseIcon && pauseText) {
+        if (consolePaused) {
+            pauseIcon.className = 'fas fa-play';
+            pauseText.textContent = 'Resume';
+            log('⏸️ Console output paused', 'warning');
+        } else {
+            pauseIcon.className = 'fas fa-pause';
+            pauseText.textContent = 'Pause';
+            log('▶️ Console output resumed', 'success');
+            
+            // Flush buffer
+            while (consoleBuffer.length > 0) {
+                const buffered = consoleBuffer.shift();
+                log(buffered.message, buffered.type, buffered.showTimestamp);
+            }
+        }
+    }
+}
+
+// Initialize when page loads
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('🚀 Monitor page auto-refresh initialized');
+    
+    // Initialize the monitor page
+    initializeMonitorPage();
+    
+    // Add event listeners for configuration changes
+    setupConfigurationEventListeners();
+    
+    // Welcome message with tips after a delay
+    setTimeout(() => {
+        const output = document.getElementById('console-output');
+        if (output && output.children.length <= 2) {
+            log('💡 Pro Tips:', 'info');
+            log('  • Ctrl+Enter: Run immediate check', 'info');
+            log('  • Ctrl+Shift+C: Clear console', 'info');
+            log('  • Auto-scroll can be toggled with the button above', 'info');
+            log('  • Console output can be paused and exported', 'info');
+        }
+    }, 3000);
+});
+
+// Auto-refresh status every 30 seconds
 setInterval(() => {
     if (isMonitorRunning) {
         loadStatus();
-        
-        // Add a subtle progress indicator
         log('🔄 Checking monitor status...', 'info');
     }
 }, 30000);
-
-// Countdown timer for next check
-let countdownInterval;
-
-function startCountdown(nextCheckTime) {
-    if (countdownInterval) {
-        clearInterval(countdownInterval);
-    }
-    
-    countdownInterval = setInterval(() => {
-        if (!isMonitorRunning) {
-            clearInterval(countdownInterval);
-            return;
-        }
-        
-        const now = new Date();
-        const nextCheck = new Date(nextCheckTime);
-        const timeUntil = nextCheck - now;
-        
-        if (timeUntil <= 0) {
-            log('⏰ Check time reached! Monitor should be analyzing now...', 'highlight');
-            clearInterval(countdownInterval);
-            return;
-        }
-        
-        const minutes = Math.floor(timeUntil / 60000);
-        const seconds = Math.floor((timeUntil % 60000) / 1000);
-        
-        // Update next check display with countdown
-        document.getElementById('next-check').textContent = `${minutes}m ${seconds}s`;
-        
-        // Log countdown at specific intervals
-        if (minutes === 1 && seconds === 0) {
-            log('⏰ Next check in 1 minute', 'warning');
-        } else if (minutes === 0 && seconds === 30) {
-            log('⏰ Next check in 30 seconds', 'warning');
-        } else if (minutes === 0 && seconds <= 10 && seconds > 0) {
-            log(`⏰ Next check in ${seconds} seconds`, 'highlight');
-        }
-    }, 1000);
-}
-
-// Enhanced status updates with more detailed logging
-async function enhancedStatusUpdate() {
-    try {
-        const data = await makeApiCall('/api/monitor/status');
-        updateUI(data);
-        
-        // Start countdown if monitor is running and we have next check time
-        const status = data.data || data;
-        if (status.is_running && status.next_check) {
-            startCountdown(status.next_check);
-        }
-        
-        // Log interesting changes
-        if (status.stats && status.stats.total_alerts > 0) {
-            const newAlerts = status.stats.total_alerts - (window.lastAlertCount || 0);
-            if (newAlerts > 0) {
-                logAlert(`${newAlerts} new alert(s) detected!`);
-                window.lastAlertCount = status.stats.total_alerts;
-            }
-        }
-    } catch (error) {
-        if (error.message.includes('fetch')) {
-            log('⚠️ Connection to monitor lost, retrying...', 'warning');
-        }
-    }
-}
-
-// Replace the simple setInterval with enhanced updates
-setInterval(enhancedStatusUpdate, 10000); // Every 10 seconds for more responsive updates
-
-// Page visibility API to pause updates when tab is not active
-document.addEventListener('visibilitychange', function() {
-    if (document.hidden) {
-        log('👁️ Tab hidden, reducing update frequency', 'info');
-    } else {
-        log('👁️ Tab visible, resuming normal updates', 'info');
-        loadStatus(); // Immediate update when tab becomes visible
-    }
-});
 
 // Keyboard shortcuts
 document.addEventListener('keydown', function(e) {
@@ -1169,18 +1456,22 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
-// Welcome message with tips
-setTimeout(() => {
-    if (document.getElementById('console-output').children.length <= 2) {
-        log('💡 Pro Tips:', 'info');
-        log('  • Ctrl+Enter: Run immediate check', 'info');
-        log('  • Ctrl+Shift+C: Clear console', 'info');
-        log('  • Auto-scroll can be toggled with the button above', 'info');
-        log('  • Console output can be paused and exported', 'info');
+// Page visibility API to pause updates when tab is not active
+document.addEventListener('visibilitychange', function() {
+    if (document.hidden) {
+        log('👁️ Tab hidden, reducing update frequency', 'info');
+    } else {
+        log('👁️ Tab visible, resuming normal updates', 'info');
+        loadStatus(); // Immediate update when tab becomes visible
     }
-}, 3000);
+});
 
-// Add a diagnostic function for debugging
+// Cleanup on page unload
+window.addEventListener('beforeunload', function() {
+    stopAlertRefresh();
+});
+
+// Debug function for troubleshooting
 window.debugMonitorPage = function() {
     console.log('=== Monitor Page Debug Info ===');
     console.log('API calls in progress:', apiCallsInProgress.size);
@@ -1212,7 +1503,21 @@ window.debugMonitorPage = function() {
     });
 };
 
-// Expose debug function to console
 console.log('💡 Debug function available: debugMonitorPage()');
+
+// Update current time function if element exists
+function updateTime() {
+    const now = new Date();
+    const timeElement = document.getElementById('current-time');
+    if (timeElement) {
+        timeElement.textContent = now.toLocaleString();
+    }
+}
+
+// Start time updates if element exists
+if (document.getElementById('current-time')) {
+    updateTime();
+    setInterval(updateTime, 1000);
+}
 </script>
 {% endblock %}

@@ -32,8 +32,6 @@ class DatabaseClient:
         """Get top wallets"""
         try:
             query = {}
-            if network:
-                query['network'] = network
             
             cursor = self.wallets_collection.find(query).sort('score', 1).limit(limit)
             wallets = await cursor.to_list(length=limit)

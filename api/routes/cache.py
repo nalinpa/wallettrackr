@@ -46,8 +46,8 @@ async def warm_cache(
 ):
     """Warm cache by running analysis for specified networks"""
     try:
-        from services.async_services.service_container import AsyncServiceContainer
-        from core.analysis.async_buy_analyzer import AsyncBuyAnalyzer
+        from services.service_container import AsyncServiceContainer
+        from core.analysis.buy_analyzer import AsyncBuyAnalyzer
         
         results = {}
         

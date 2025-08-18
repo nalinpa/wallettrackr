@@ -109,7 +109,7 @@ class AlchemyClient:
             tasks.append((address, task))
         
         # Process in batches to avoid API limits
-        batch_size = 10
+        batch_size = 6
         all_results = {}
         
         for i in range(0, len(tasks), batch_size):
@@ -130,9 +130,9 @@ class AlchemyClient:
             
             # Brief pause between batches
             if i + batch_size < len(tasks):
-                await asyncio.sleep(0.1)
-        
-        logger.info(f"✅ Completed batch processing for {len(addresses)} addresses")
+                await asyncio.sleep(1)
+
+        print(f"✅ Completed batch processing for {len(addresses)} addresses")
         return all_results
     
     async def _get_address_transfers(self, address: str, start_block: str, end_block: str) -> Dict[str, List]:

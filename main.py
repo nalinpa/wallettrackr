@@ -60,21 +60,14 @@ from api.routes.analysis import router as analysis_router
 from api.routes.status import router as status_router
 from api.routes.cache import router as cache_router
 from api.routes.frontend import router as frontend_router
-
-try:
-    from api.routes.debug import router as debug_router
-    DEBUG_AVAILABLE = True
-except ImportError:
-    DEBUG_AVAILABLE = False
+from api.routes.monitoring import router as monitoring_router
 
 app.include_router(analysis_router, prefix="/api")
 app.include_router(status_router, prefix="/api")
 app.include_router(cache_router, prefix="/api")
 app.include_router(frontend_router)
+app.include_router(monitoring_router, prefix="/api") 
 
-if DEBUG_AVAILABLE:
-    app.include_router(debug_router, prefix="/api")
-    logger.info("🐛 Debug routes enabled")
 
 
 

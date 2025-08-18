@@ -69,21 +69,15 @@
 {% endblock %}
 
 {% block content %}
-<div class="status-indicator">
-    <span id="status-indicator" class="badge bg-success">
-        <i class="fas fa-circle me-1"></i>Online
-    </span>
-</div>
-
 <!-- Control Buttons -->
 <div class="row mb-4">
     <div class="col-12">
         <div class="crypto-card p-3">
             <div class="d-flex flex-wrap justify-content-center gap-2">
-                <button class="btn btn-primary active" onclick="loadData('eth', 'buy')">
+                <button class="btn btn-primary active" onclick="loadData('ethereum', 'buy')">
                     <i class="fab fa-ethereum me-2"></i>ETH Buys
                 </button>
-                <button class="btn btn-outline-primary" onclick="loadData('eth', 'sell')">
+                <button class="btn btn-outline-primary" onclick="loadData('ethereum', 'sell')">
                     <i class="fab fa-ethereum me-2"></i>ETH Sells
                 </button>
                 <button class="btn btn-info" onclick="loadData('base', 'buy')">
@@ -174,7 +168,7 @@
 
 {% block scripts %}
 <script>
-let currentNetwork = 'eth';
+let currentNetwork = 'ethereum';
 let currentType = 'buy';
 let eventSource = null;
 let consoleModal;
@@ -466,11 +460,11 @@ document.addEventListener('keydown', function(e) {
         switch(e.key) {
             case '1':
                 e.preventDefault();
-                loadData('eth', 'buy');
+                loadData('ethereum', 'buy');
                 break;
             case '2':
                 e.preventDefault();
-                loadData('eth', 'sell');
+                loadData('ethereum', 'sell');
                 break;
             case '3':
                 e.preventDefault();
