@@ -409,6 +409,7 @@ let apiCallsInProgress = new Set();
 let alertRefreshInterval;
 let lastAlertCount = 0;
 let isRefreshing = false;
+let alertsLoaded = false;
 
 // Enhanced API call function with better error handling
 async function makeApiCall(url, options = {}) {
@@ -594,6 +595,206 @@ function showToast(message, type = 'info') {
     }
 }
 
+function getValidatedEthValue(alert) {
+    if (!alert || !alert.data) {
+        console.warn('⚠️ Alert missing data:', alert);
+        return 0;
+    }
+    
+    // Try different possible ETH value fields
+    let ethValue = 0;
+    
+    if (alert.alert_type === 'sell_pressure') {
+        // For sell pressure alerts, try these fields in order
+        ethValue = alert.data.total_estimated_eth || 
+                  alert.data.total_eth_value || 
+                  alert.data.total_eth_spent || 
+                  0;
+    } else {
+        // For buy/new token alerts, try these fields in order
+        ethValue = alert.data.total_eth_spent || 
+                  alert.data.total_eth_value || 
+                  alert.data.total_estimated_eth || 
+                  0;
+    }
+    
+    // Convert to number and validate
+    ethValue = parseFloat(ethValue) || 0;
+    
+    // Log suspicious values for debugging
+    if (ethValue > 100) {
+        console.warn(`⚠️ Suspiciously high ETH value for ${alert.token}:`, {
+            alertType: alert.alert_type,
+            ethValue: ethValue,
+            walletCount: alert.data?.wallet_count,
+            rawData: alert.data
+        });
+    }
+    
+    // If the value seems unreasonably high, try to calculate a more reasonable estimate
+    if (ethValue > 50 && alert.data?.wallet_count === 1) {
+        // For single wallet with very high value, it might be a calculation error
+        // Try to estimate based on typical transaction values
+        const estimatedValue = Math.min(ethValue, 10); // Cap at 10 ETH for single wallet
+        
+        console.warn(`🔧 Capping ETH value for ${alert.token} from ${ethValue} to ${estimatedValue}`);
+        return estimatedValue;
+    }
+    
+    return ethValue;
+}
+
+// Helper function to format ETH value for display
+function formatEthValue(ethValue) {
+    if (ethValue === 0) {
+        return '0.0000 ETH';
+    }
+    
+    if (ethValue < 0.0001) {
+        return '<0.0001 ETH';
+    }
+    
+    if (ethValue < 1) {
+        return `${ethValue.toFixed(4)} ETH`;
+    }
+    
+    if (ethValue < 10) {
+        return `${ethValue.toFixed(3)} ETH`;
+    }
+    
+    if (ethValue < 100) {
+        return `${ethValue.toFixed(2)} ETH`;
+    }
+    
+    // For very high values, show with warning indicator
+    return `${ethValue.toFixed(1)} ETH ⚠️`;
+}
+
+// All missing helper functions for the alerts system
+
+// Helper function to get validated ETH value with proper fallbacks
+function getValidatedEthValue(alert) {
+    if (!alert || !alert.data) {
+        console.warn('⚠️ Alert missing data:', alert);
+        return 0;
+    }
+    
+    // Try different possible ETH value fields
+    let ethValue = 0;
+    
+    if (alert.alert_type === 'sell_pressure') {
+        // For sell pressure alerts, try these fields in order
+        ethValue = alert.data.total_estimated_eth || 
+                  alert.data.total_eth_value || 
+                  alert.data.total_eth_spent || 
+                  0;
+    } else {
+        // For buy/new token alerts, try these fields in order
+        ethValue = alert.data.total_eth_spent || 
+                  alert.data.total_eth_value || 
+                  alert.data.total_estimated_eth || 
+                  0;
+    }
+    
+    // Convert to number and validate
+    ethValue = parseFloat(ethValue) || 0;
+    
+    // Log suspicious values for debugging
+    if (ethValue > 100) {
+        console.warn(`⚠️ Suspiciously high ETH value for ${alert.token}:`, {
+            alertType: alert.alert_type,
+            ethValue: ethValue,
+            walletCount: alert.data?.wallet_count,
+            rawData: alert.data
+        });
+    }
+    
+    // If the value seems unreasonably high, try to calculate a more reasonable estimate
+    if (ethValue > 50 && alert.data?.wallet_count === 1) {
+        // For single wallet with very high value, it might be a calculation error
+        // Try to estimate based on typical transaction values
+        const estimatedValue = Math.min(ethValue, 10); // Cap at 10 ETH for single wallet
+        
+        console.warn(`🔧 Capping ETH value for ${alert.token} from ${ethValue} to ${estimatedValue}`);
+        return estimatedValue;
+    }
+    
+    return ethValue;
+}
+
+// Helper function to format ETH value for display
+function formatEthValue(ethValue) {
+    if (ethValue === 0) {
+        return '0.0000 ETH';
+    }
+    
+    if (ethValue < 0.0001) {
+        return '<0.0001 ETH';
+    }
+    
+    if (ethValue < 1) {
+        return `${ethValue.toFixed(4)} ETH`;
+    }
+    
+    if (ethValue < 10) {
+        return `${ethValue.toFixed(3)} ETH`;
+    }
+    
+    if (ethValue < 100) {
+        return `${ethValue.toFixed(2)} ETH`;
+    }
+    
+    // For very high values, show with warning indicator
+    return `${ethValue.toFixed(1)} ETH ⚠️`;
+}
+
+// Helper function to get transaction count with proper fallbacks
+function getTransactionCount(alert) {
+    if (!alert || !alert.data) return 0;
+    
+    // Try different possible transaction count fields
+    const transactionCount = alert.data.total_purchases || 
+                           alert.data.total_sells || 
+                           alert.data.total_transactions ||
+                           alert.data.transaction_count ||
+                           0;
+    
+    return parseInt(transactionCount) || 0;
+}
+
+// Utility functions for alert display
+function getAlertClass(alert) {
+    if (alert.confidence === 'HIGH') return 'high-confidence';
+    if (alert.confidence === 'MEDIUM') return 'medium-confidence';
+    if (alert.alert_type === 'sell_pressure') return 'sell-pressure';
+    return '';
+}
+
+function getAlertEmoji(alert) {
+    switch (alert.alert_type) {
+        case 'new_token': return '🆕';
+        case 'high_activity': return '📈';
+        case 'sell_pressure': return '📉';
+        default: return '🔔';
+    }
+}
+
+function getConfidenceBadge(alert) {
+    const confidence = alert.confidence || 'LOW';
+    const colors = {
+        'HIGH': 'bg-danger',
+        'MEDIUM': 'bg-warning',
+        'LOW': 'bg-secondary'
+    };
+    const emojis = {
+        'HIGH': '🔥',
+        'MEDIUM': '⚠️',
+        'LOW': 'ℹ️'
+    };
+    
+    return `<span class="badge ${colors[confidence]} ms-2">${emojis[confidence]} ${confidence}</span>`;
+}
+
 function startAlertRefresh() {
     if (alertRefreshInterval) {
         clearInterval(alertRefreshInterval);
@@ -660,141 +861,41 @@ function stopAlertRefresh() {
     }
 }
 
-function updateUI(response) {
-    // Handle both direct data and wrapped responses
-    const status = response.data || response;
-    console.log('🔄 Status updated:', status);
 
-    const indicator = document.getElementById('status-indicator');
-    const statusText = document.getElementById('status-text');
-    const startBtn = document.getElementById('start-btn');
-    const stopBtn = document.getElementById('stop-btn');
-    const monitorStatus = document.getElementById('monitor-status');
-    const consoleStatus = document.getElementById('console-status');
-    
-    isMonitorRunning = status.is_running;
-    
-    if (isMonitorRunning) {
-        if (indicator) indicator.classList.add('active');
-        if (statusText) statusText.textContent = 'Monitor Active';
-        if (monitorStatus) {
-            monitorStatus.className = 'badge bg-success';
-            monitorStatus.textContent = 'Active';
-        }
-        if (consoleStatus) consoleStatus.style.display = 'inline-block';
-        if (startBtn) startBtn.style.display = 'none';
-        if (stopBtn) stopBtn.style.display = 'inline-block';
-        
-        // Start auto-refresh when monitor is active
-        startAlertRefresh();
-        log('✅ Monitor is running - auto-refresh enabled', 'success');
-    } else {
-        if (indicator) indicator.classList.remove('active');
-        if (statusText) statusText.textContent = 'Monitor Inactive';
-        if (monitorStatus) {
-            monitorStatus.className = 'badge bg-secondary';
-            monitorStatus.textContent = 'Inactive';
-        }
-        if (consoleStatus) consoleStatus.style.display = 'none';
-        if (startBtn) startBtn.style.display = 'inline-block';
-        if (stopBtn) stopBtn.style.display = 'none';
-        
-        // Stop auto-refresh when monitor is inactive
-        stopAlertRefresh();
-        log('🛑 Monitor stopped - auto-refresh disabled', 'info');
-    }
-    
-    if (status.last_check) {
-        const lastCheck = new Date(status.last_check);
-        const lastCheckElement = document.getElementById('last-check');
-        if (lastCheckElement) {
-            lastCheckElement.textContent = lastCheck.toLocaleTimeString();
-        }
-    }
-    
-    if (status.next_check && isMonitorRunning) {
-        const nextCheck = new Date(status.next_check);
-        const nextCheckElement = document.getElementById('next-check');
-        if (nextCheckElement) {
-            nextCheckElement.textContent = nextCheck.toLocaleTimeString();
-        }
-        
-        // Calculate time until next check
-        const now = new Date();
-        const timeUntil = nextCheck - now;
-        if (timeUntil > 0) {
-            const minutes = Math.floor(timeUntil / 60000);
-            const seconds = Math.floor((timeUntil % 60000) / 1000);
-            log(`⏰ Next check in ${minutes}m ${seconds}s`, 'info');
-        }
-    } else {
-        const nextCheckElement = document.getElementById('next-check');
-        if (nextCheckElement) {
-            nextCheckElement.textContent = '-';
-        }
-    }
-    
-    // Only update config fields if they don't have focus (to avoid overriding user input)
-    if (status.config) {
-        const intervalSelect = document.getElementById('interval-select');
-        const numWallets = document.getElementById('num-wallets');
-        const useIntervalTimeframe = document.getElementById('use-interval-timeframe');
-        const networkEth = document.getElementById('network-eth');
-        const networkBase = document.getElementById('network-base');
-        
-        // Only update if the element doesn't have focus (user isn't currently editing)
-        if (intervalSelect && document.activeElement !== intervalSelect) {
-            intervalSelect.value = status.config.check_interval_minutes || 60;
-        }
-        if (numWallets && document.activeElement !== numWallets) {
-            numWallets.value = status.config.num_wallets || 50;
-        }
-        if (useIntervalTimeframe && document.activeElement !== useIntervalTimeframe) {
-            useIntervalTimeframe.checked = status.config.use_interval_for_timeframe !== false;
-        }
-        
-        // Update network checkboxes (these are less likely to be actively edited)
-        if (status.config.networks) {
-            if (networkEth && document.activeElement !== networkEth) {
-                networkEth.checked = status.config.networks.includes('ethereum');
-            }
-            if (networkBase && document.activeElement !== networkBase) {
-                networkBase.checked = status.config.networks.includes('base');
-            }
-        }
-    }
-    
-    // Only update threshold fields if they don't have focus
-    if (status.alert_thresholds) {
-        const minWallets = document.getElementById('min-wallets');
-        const minEth = document.getElementById('min-eth');
-        const minScore = document.getElementById('min-score');
-        
-        if (minWallets && document.activeElement !== minWallets) {
-            minWallets.value = status.alert_thresholds.min_wallets || 2;
-        }
-        if (minEth && document.activeElement !== minEth) {
-            minEth.value = status.alert_thresholds.min_eth_total || 0.5;
-        }
-        if (minScore && document.activeElement !== minScore) {
-            minScore.value = status.alert_thresholds.min_alpha_score || 30;
-        }
-    }
-}
-
-// Enhanced loadAlerts function
 async function loadAlerts() {
+    const container = document.getElementById('alerts-container');
+    if (!container) {
+        console.error('❌ Alerts container not found');
+        return;
+    }
+    
     try {
+        // Show loading state only on first load or if no alerts are currently displayed
+        if (!alertsLoaded || container.children.length === 0) {
+            container.innerHTML = `
+                <div class="text-center py-3" id="alerts-loading">
+                    <div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>
+                    <span class="text-muted">Loading alerts...</span>
+                </div>
+            `;
+        }
+        
         log('📋 Loading recent alerts...', 'info');
         const alerts = await makeApiCall('/api/monitor/alerts?limit=20');
         
-        const container = document.getElementById('alerts-container');
-        if (!container) return;
+        alertsLoaded = true;
         
         if (!alerts || alerts.length === 0) {
-            container.innerHTML = '<p class="text-muted">No alerts yet. Start monitoring or run an immediate check to generate alerts.</p>';
+            container.innerHTML = `
+                <div class="text-center py-4">
+                    <i class="fas fa-bell-slash fa-2x text-muted mb-3"></i>
+                    <h6 class="text-muted">No alerts yet</h6>
+                    <p class="text-muted small mb-0">Start monitoring or run an immediate check to generate alerts.</p>
+                </div>
+            `;
+            log('📋 No alerts found', 'info');
         } else {
-            log(`📋 Displaying ${alerts.length} recent alerts`, 'info');
+            log(`📋 Displaying ${alerts.length} recent alerts`, 'success');
             
             let html = '';
             alerts.forEach((alert, index) => {
@@ -806,35 +907,109 @@ async function loadAlerts() {
                 // Get the correct score based on alert type
                 const score = alert.data?.alpha_score || alert.data?.sell_score || 0;
                 
-                // Get ETH value based on alert type
-                const ethValue = alert.data?.total_eth_spent || alert.data?.total_eth_value || 0;
+                // Get ETH value with validation
+                const ethValue = getValidatedEthValue(alert);
+                const ethDisplay = formatEthValue(ethValue);
                 
-                // Animation class for new alerts
+                // Get transaction count with proper fallback
+                const transactionCount = getTransactionCount(alert);
+                
+                // Animation class for new alerts (first 3)
                 const isNewAlert = index < 3 ? 'alert-new' : '';
                 
+                // Get contract address for links and display
+                const contractAddress = alert.data?.contract_address || '';
+                const tokenSymbol = alert.token || '';
+                const network = alert.network || 'ethereum';
+                const detailsUrl = `/token?contract=${encodeURIComponent(contractAddress)}&token=${encodeURIComponent(tokenSymbol)}&network=${network}`;
+                
+                // Format contract address for display
+                const contractDisplay = contractAddress ? 
+                    `${contractAddress.slice(0, 6)}...${contractAddress.slice(-4)}` : 
+                    'N/A';
+                
+                // Determine explorer URL based on network
+                const explorerUrl = getExplorerUrl(contractAddress, network);
+                
                 html += `
-                    <div class="alert-item ${alertClass} ${isNewAlert}">
-                        <div class="alert-token">
-                            ${alertEmoji} ${alert.token} ${networkBadge} ${confidenceBadge}
-                        </div>
-                        <div class="row g-2 mb-2">
-                            <div class="col-md-3">
-                                <small class="text-muted">ETH Value:</small>
-                                <div class="fw-bold text-success">${ethValue.toFixed(4)} ETH</div>
+                    <div class="alert-item ${alertClass} ${isNewAlert}" data-alert-id="${alert.id}">
+                        <div class="d-flex justify-content-between align-items-start mb-3">
+                            <div class="alert-token">
+                                ${alertEmoji} ${alert.token} ${networkBadge} ${confidenceBadge}
                             </div>
-                            <div class="col-md-3">
+                            <div class="d-flex gap-2">
+                                ${contractAddress ? `
+                                    <a href="${detailsUrl}" target="_blank" class="btn btn-sm btn-outline-primary" title="View token details">
+                                        <i class="fas fa-info-circle"></i>
+                                    </a>
+                                    <a href="${explorerUrl}" target="_blank" class="btn btn-sm btn-outline-info" title="View on explorer">
+                                        <i class="fas fa-external-link-alt"></i>
+                                    </a>
+                                ` : ''}
+                                <button class="btn btn-sm btn-outline-secondary" onclick="copyAlertContract('${contractAddress}')" title="Copy contract address">
+                                    <i class="fas fa-copy"></i>
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div class="row g-2 mb-3">
+                            <div class="col-md-3 col-6">
+                                <small class="text-muted">ETH Value:</small>
+                                <div class="fw-bold text-success">${ethDisplay}</div>
+                            </div>
+                            <div class="col-md-3 col-6">
                                 <small class="text-muted">Wallets:</small>
                                 <div class="fw-bold text-info">${alert.data?.wallet_count || 0}</div>
                             </div>
-                            <div class="col-md-3">
+                            <div class="col-md-3 col-6">
                                 <small class="text-muted">Score:</small>
                                 <div class="fw-bold text-warning">${score.toFixed(1)}</div>
                             </div>
-                            <div class="col-md-3">
+                            <div class="col-md-3 col-6">
                                 <small class="text-muted">Activity:</small>
-                                <div class="small">${alert.data?.total_purchases || alert.data?.total_sells || 0} transactions</div>
+                                <div class="small">${transactionCount} txns</div>
                             </div>
                         </div>
+                        
+                        <!-- Enhanced Contract Address Section -->
+                        ${contractAddress ? `
+                            <div class="row g-2 mb-3">
+                                <div class="col-12">
+                                    <div class="contract-address-section p-2 bg-dark rounded border">
+                                        <div class="d-flex justify-content-between align-items-center mb-2">
+                                            <small class="text-muted fw-bold">
+                                                <i class="fas fa-file-contract me-1"></i>Contract Address
+                                            </small>
+                                            <div class="btn-group btn-group-sm" role="group">
+                                                <button type="button" class="btn btn-outline-light btn-sm" onclick="copyAlertContract('${contractAddress}')" title="Copy full address">
+                                                    <i class="fas fa-copy"></i>
+                                                </button>
+                                                <a href="${explorerUrl}" target="_blank" class="btn btn-outline-info btn-sm" title="View on ${network === 'base' ? 'BaseScan' : 'Etherscan'}">
+                                                    <i class="fas fa-search"></i>
+                                                </a>
+                                                <a href="https://dexscreener.com/${network}/${contractAddress}" target="_blank" class="btn btn-outline-warning btn-sm" title="View on DexScreener">
+                                                    <i class="fas fa-chart-line"></i>
+                                                </a>
+                                            </div>
+                                        </div>
+                                        <div class="contract-address-display">
+                                            <code class="text-light user-select-all d-block p-2 bg-black rounded" style="font-size: 0.85rem; word-break: break-all; cursor: pointer;" onclick="copyAlertContract('${contractAddress}')" title="Click to copy">${contractAddress}</code>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        ` : `
+                            <div class="row g-2 mb-3">
+                                <div class="col-12">
+                                    <div class="contract-address-section p-2 bg-secondary rounded border">
+                                        <small class="text-muted">
+                                            <i class="fas fa-exclamation-triangle me-1"></i>Contract address not available
+                                        </small>
+                                    </div>
+                                </div>
+                            </div>
+                        `}
+                        
                         <div class="row g-2 mb-2">
                             <div class="col-md-6">
                                 <small class="text-muted">Platforms/Methods:</small>
@@ -845,9 +1020,20 @@ async function loadAlerts() {
                                 <div class="small text-capitalize">${alert.alert_type?.replace('_', ' ') || 'Unknown'}</div>
                             </div>
                         </div>
-                        <div class="mt-2">
+                        
+                        ${ethValue > 10 ? `
+                            <div class="alert alert-warning py-2 mb-2">
+                                <small><i class="fas fa-exclamation-triangle me-1"></i>
+                                High ETH value detected (${ethValue.toFixed(4)} ETH) - please verify data accuracy</small>
+                            </div>
+                        ` : ''}
+                        
+                        <div class="d-flex justify-content-between align-items-center">
                             <small class="text-muted">
                                 🕐 ${new Date(alert.timestamp).toLocaleString()}
+                            </small>
+                            <small class="text-muted">
+                                ID: ${alert.id?.slice(-8) || 'N/A'}
                             </small>
                         </div>
                     </div>
@@ -857,27 +1043,128 @@ async function loadAlerts() {
             container.innerHTML = html;
             
             // Add CSS for new alert animation if not exists
-            if (!document.getElementById('alert-animation-css')) {
-                const style = document.createElement('style');
-                style.id = 'alert-animation-css';
-                style.textContent = `
-                    .alert-new {
-                        animation: alertHighlight 3s ease-in-out;
-                        border-left: 4px solid #28a745 !important;
-                    }
-                    @keyframes alertHighlight {
-                        0% { background-color: rgba(40, 167, 69, 0.3); }
-                        100% { background-color: transparent; }
-                    }
-                `;
-                document.head.appendChild(style);
-            }
+            ensureAlertAnimationCSS();
         }
         
         log('✅ Alerts loaded successfully', 'success');
         
     } catch (error) {
-        showApiError('/api/monitor/alerts', error, 'alerts-container');
+        console.error('❌ Error loading alerts:', error);
+        alertsLoaded = false;
+        
+        const errorHtml = `
+            <div class="error-message">
+                <strong>❌ Failed to load alerts:</strong><br>
+                ${error.message}<br>
+                <small class="d-block mt-2">
+                    <strong>Troubleshooting:</strong><br>
+                    • Check if the monitor API is running<br>
+                    • Verify the alerts endpoint is working<br>
+                    • Try refreshing the page<br>
+                </small>
+                <button class="retry-button mt-2" onclick="retryLoadAlerts()">
+                    🔄 Retry Loading Alerts
+                </button>
+            </div>
+        `;
+        
+        container.innerHTML = errorHtml;
+        log(`❌ Failed to load alerts: ${error.message}`, 'error');
+    }
+}
+
+// Helper function to get explorer URL based on network
+function getExplorerUrl(contractAddress, network) {
+    if (!contractAddress) return '#';
+    
+    const explorers = {
+        'ethereum': `https://etherscan.io/address/${contractAddress}`,
+        'base': `https://basescan.org/address/${contractAddress}`,
+        'arbitrum': `https://arbiscan.io/address/${contractAddress}`,
+        'polygon': `https://polygonscan.com/address/${contractAddress}`
+    };
+    
+    return explorers[network] || explorers['ethereum'];
+}
+
+// Enhanced copyAlertContract function with better feedback
+function copyAlertContract(contractAddress) {
+    if (!contractAddress || contractAddress === 'N/A') {
+        showToast('No contract address available', 'error');
+        return;
+    }
+    
+    navigator.clipboard.writeText(contractAddress).then(() => {
+        showToast(`Contract address copied! ${contractAddress.slice(0, 10)}...`, 'success');
+        log(`📋 Copied contract address: ${contractAddress}`, 'info');
+        
+        // Visual feedback on the copied element
+        const codeElements = document.querySelectorAll('code');
+        codeElements.forEach(el => {
+            if (el.textContent === contractAddress) {
+                el.style.backgroundColor = 'rgba(40, 167, 69, 0.3)';
+                setTimeout(() => {
+                    el.style.backgroundColor = '';
+                }, 1000);
+            }
+        });
+        
+    }).catch(err => {
+        console.error('Failed to copy contract address:', err);
+        showToast('Failed to copy address', 'error');
+    });
+}
+
+// Enhanced alert animation CSS with contract address styling
+function ensureAlertAnimationCSS() {
+    if (!document.getElementById('alert-animation-css')) {
+        const style = document.createElement('style');
+        style.id = 'alert-animation-css';
+        style.textContent = `
+            .alert-new {
+                animation: alertHighlight 3s ease-in-out;
+                border-left: 4px solid #28a745 !important;
+            }
+            @keyframes alertHighlight {
+                0% { background-color: rgba(40, 167, 69, 0.3); }
+                100% { background-color: transparent; }
+            }
+            .user-select-all {
+                user-select: all;
+                cursor: pointer;
+                transition: background-color 0.3s ease;
+            }
+            .user-select-all:hover {
+                background-color: rgba(255, 255, 255, 0.1) !important;
+            }
+            .contract-address-section {
+                border-left: 3px solid #007bff !important;
+                transition: all 0.3s ease;
+            }
+            .contract-address-section:hover {
+                border-left-color: #ffc107 !important;
+                background-color: rgba(255, 193, 7, 0.1) !important;
+            }
+            .contract-address-display code {
+                transition: all 0.3s ease;
+            }
+            .contract-address-display code:hover {
+                background-color: rgba(0, 123, 255, 0.2) !important;
+                transform: scale(1.02);
+            }
+            .btn-group-sm .btn {
+                font-size: 0.75rem;
+                padding: 0.25rem 0.5rem;
+            }
+            .alert-item {
+                transition: all 0.3s ease;
+            }
+            .alert-item:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+            }
+        `;
+        document.head.appendChild(style);
     }
 }
 
@@ -1087,126 +1374,6 @@ function toggleAutoScroll() {
     }
 }
 
-// Configuration functions
-async function updateConfig() {
-    const networks = [];
-    const networkEth = document.getElementById('network-eth');
-    const networkBase = document.getElementById('network-base');
-    
-    if (networkEth && networkEth.checked) networks.push('ethereum');
-    if (networkBase && networkBase.checked) networks.push('base');
-    
-    const intervalSelect = document.getElementById('interval-select');
-    const numWallets = document.getElementById('num-wallets');
-    const useIntervalTimeframe = document.getElementById('use-interval-timeframe');
-    
-    const config = {
-        check_interval_minutes: parseInt(intervalSelect?.value || 60),
-        networks: networks,
-        num_wallets: parseInt(numWallets?.value || 50),
-        use_interval_for_timeframe: useIntervalTimeframe?.checked !== false
-    };
-    
-    // Validate configuration
-    if (networks.length === 0) {
-        showToast('Please select at least one network', 'error');
-        return;
-    }
-    
-    if (config.num_wallets < 5 || config.num_wallets > 174) {
-        showToast('Number of wallets must be between 5 and 174', 'error');
-        return;
-    }
-    
-    log(`⚙️ Updating configuration...`, 'info');
-    log(`📊 New settings: ${networks.join(', ')} networks, ${config.num_wallets} wallets, ${config.check_interval_minutes}min interval`, 'info');
-    
-    // Show visual feedback
-    showConfigurationStatus('updating');
-    
-    try {
-        const data = await makeApiCall('/api/monitor/config', {
-            method: 'POST',
-            body: JSON.stringify(config)
-        });
-        
-        if (data.status === 'success') {
-            log('✅ Configuration updated successfully', 'success');
-            showToast('Configuration updated successfully', 'success');
-            showConfigurationStatus('success');
-            
-            // Don't reload status immediately to avoid overriding user changes
-            setTimeout(() => loadStatus(), 10000);
-        } else {
-            log(`❌ Config update failed: ${data.message}`, 'error');
-            showToast(`Config update failed: ${data.message}`, 'error');
-            showConfigurationStatus('error');
-        }
-    } catch (error) {
-        log(`❌ Error updating config: ${error.message}`, 'error');
-        showToast('Error updating configuration', 'error');
-        showConfigurationStatus('error');
-    }
-}
-
-async function updateThresholds() {
-    const minWallets = document.getElementById('min-wallets');
-    const minEth = document.getElementById('min-eth');
-    const minScore = document.getElementById('min-score');
-    
-    const thresholds = {
-        min_wallets: parseInt(minWallets?.value || 2),
-        min_eth_total: parseFloat(minEth?.value || 0.5),
-        min_alpha_score: parseFloat(minScore?.value || 30),
-        min_sell_score: 25.0,
-        min_transactions: 3,
-        filter_stablecoins: true
-    };
-    
-    // Validate thresholds
-    if (thresholds.min_wallets < 1 || thresholds.min_wallets > 20) {
-        showToast('Min wallets must be between 1 and 20', 'error');
-        return;
-    }
-    
-    if (thresholds.min_eth_total < 0.01 || thresholds.min_eth_total > 100) {
-        showToast('Min ETH must be between 0.01 and 100', 'error');
-        return;
-    }
-    
-    if (thresholds.min_alpha_score < 10 || thresholds.min_alpha_score > 100) {
-        showToast('Min alpha score must be between 10 and 100', 'error');
-        return;
-    }
-    
-    log(`🎯 Updating alert thresholds...`, 'info');
-    log(`📊 New thresholds: ${thresholds.min_wallets} wallets, ${thresholds.min_eth_total} ETH, α≥${thresholds.min_alpha_score}`, 'info');
-    
-    // Show visual feedback
-    showThresholdStatus('updating');
-    
-    try {
-        const data = await makeApiCall('/api/monitor/thresholds', {
-            method: 'POST',
-            body: JSON.stringify(thresholds)
-        });
-        
-        if (data.status === 'success') {
-            log('✅ Alert thresholds updated successfully', 'success');
-            showToast('Alert thresholds updated successfully', 'success');
-            showThresholdStatus('success');
-        } else {
-            log(`❌ Threshold update failed: ${data.message}`, 'error');
-            showToast(`Threshold update failed: ${data.message}`, 'error');
-            showThresholdStatus('error');
-        }
-    } catch (error) {
-        log(`❌ Error updating thresholds: ${error.message}`, 'error');
-        showToast('Error updating thresholds', 'error');
-        showThresholdStatus('error');
-    }
-}
-
 // Visual feedback functions for configuration updates
 function showConfigurationStatus(status) {
     const configSection = document.querySelector('.crypto-card h3');
@@ -1302,39 +1469,416 @@ function initializeMonitorPage() {
     });
 }
 
-// Setup event listeners for configuration form elements
+// Enhanced updateUI function with proper focus detection
+function updateUI(response) {
+    // Handle both direct data and wrapped responses
+    const status = response.data || response;
+    console.log('🔄 Status updated:', status);
+
+    const indicator = document.getElementById('status-indicator');
+    const statusText = document.getElementById('status-text');
+    const startBtn = document.getElementById('start-btn');
+    const stopBtn = document.getElementById('stop-btn');
+    const monitorStatus = document.getElementById('monitor-status');
+    const consoleStatus = document.getElementById('console-status');
+    
+    isMonitorRunning = status.is_running;
+    
+    if (isMonitorRunning) {
+        if (indicator) indicator.classList.add('active');
+        if (statusText) statusText.textContent = 'Monitor Active';
+        if (monitorStatus) {
+            monitorStatus.className = 'badge bg-success';
+            monitorStatus.textContent = 'Active';
+        }
+        if (consoleStatus) consoleStatus.style.display = 'inline-block';
+        if (startBtn) startBtn.style.display = 'none';
+        if (stopBtn) stopBtn.style.display = 'inline-block';
+        
+        // Start auto-refresh when monitor is active
+        startAlertRefresh();
+        log('✅ Monitor is running - auto-refresh enabled', 'success');
+    } else {
+        if (indicator) indicator.classList.remove('active');
+        if (statusText) statusText.textContent = 'Monitor Inactive';
+        if (monitorStatus) {
+            monitorStatus.className = 'badge bg-secondary';
+            monitorStatus.textContent = 'Inactive';
+        }
+        if (consoleStatus) consoleStatus.style.display = 'none';
+        if (startBtn) startBtn.style.display = 'inline-block';
+        if (stopBtn) stopBtn.style.display = 'none';
+        
+        // Stop auto-refresh when monitor is inactive
+        stopAlertRefresh();
+        log('🛑 Monitor stopped - auto-refresh disabled', 'info');
+    }
+    
+    if (status.last_check) {
+        const lastCheck = new Date(status.last_check);
+        const lastCheckElement = document.getElementById('last-check');
+        if (lastCheckElement) {
+            lastCheckElement.textContent = lastCheck.toLocaleTimeString();
+        }
+    }
+    
+    if (status.next_check && isMonitorRunning) {
+        const nextCheck = new Date(status.next_check);
+        const nextCheckElement = document.getElementById('next-check');
+        if (nextCheckElement) {
+            nextCheckElement.textContent = nextCheck.toLocaleTimeString();
+        }
+        
+        // Calculate time until next check
+        const now = new Date();
+        const timeUntil = nextCheck - now;
+        if (timeUntil > 0) {
+            const minutes = Math.floor(timeUntil / 60000);
+            const seconds = Math.floor((timeUntil % 60000) / 1000);
+            log(`⏰ Next check in ${minutes}m ${seconds}s`, 'info');
+        }
+    } else {
+        const nextCheckElement = document.getElementById('next-check');
+        if (nextCheckElement) {
+            nextCheckElement.textContent = '-';
+        }
+    }
+    
+    // FIXED: Better input focus detection and user interaction tracking
+    updateConfigurationFields(status.config);
+    updateThresholdFields(status.alert_thresholds);
+}
+
+// New helper function to safely update configuration fields
+function updateConfigurationFields(config) {
+    if (!config) return;
+    
+    const fields = [
+        { id: 'interval-select', value: config.check_interval_minutes || 60 },
+        { id: 'num-wallets', value: config.num_wallets || 50 },
+        { id: 'use-interval-timeframe', value: config.use_interval_for_timeframe !== false, type: 'checkbox' }
+    ];
+    
+    fields.forEach(field => {
+        const element = document.getElementById(field.id);
+        if (element && !isUserInteracting(element)) {
+            if (field.type === 'checkbox') {
+                element.checked = field.value;
+            } else {
+                element.value = field.value;
+            }
+        }
+    });
+    
+    // Update network checkboxes (less likely to be actively edited)
+    if (config.networks) {
+        const networkEth = document.getElementById('network-eth');
+        const networkBase = document.getElementById('network-base');
+        
+        if (networkEth && !isUserInteracting(networkEth)) {
+            networkEth.checked = config.networks.includes('ethereum');
+        }
+        if (networkBase && !isUserInteracting(networkBase)) {
+            networkBase.checked = config.networks.includes('base');
+        }
+    }
+}
+
+// New helper function to safely update threshold fields
+function updateThresholdFields(thresholds) {
+    if (!thresholds) return;
+    
+    const fields = [
+        { id: 'min-wallets', value: thresholds.min_wallets || 2 },
+        { id: 'min-eth', value: thresholds.min_eth_total || 0.5 },
+        { id: 'min-score', value: thresholds.min_alpha_score || 30 }
+    ];
+    
+    fields.forEach(field => {
+        const element = document.getElementById(field.id);
+        if (element && !isUserInteracting(element)) {
+            element.value = field.value;
+        }
+    });
+}
+
+// Enhanced function to detect if user is currently interacting with an element
+function isUserInteracting(element) {
+    if (!element) return false;
+    
+    // Check if element has focus
+    if (document.activeElement === element) {
+        return true;
+    }
+    
+    // Check if element was recently interacted with
+    const lastInteraction = element.dataset.lastInteraction;
+    if (lastInteraction) {
+        const timeSinceInteraction = Date.now() - parseInt(lastInteraction);
+        // Don't update for 5 seconds after user interaction
+        if (timeSinceInteraction < 5000) {
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+// Track user interactions to prevent overriding values
+function trackUserInteraction(element) {
+    if (element) {
+        element.dataset.lastInteraction = Date.now().toString();
+    }
+}
+
+// Enhanced setupConfigurationEventListeners with interaction tracking
 function setupConfigurationEventListeners() {
     // Configuration section event listeners
-    const intervalSelect = document.getElementById('interval-select');
+    const configElements = [
+        'interval-select',
+        'network-eth', 
+        'network-base',
+        'num-wallets',
+        'use-interval-timeframe'
+    ];
+    
+    // Threshold section event listeners
+    const thresholdElements = [
+        'min-wallets',
+        'min-eth',
+        'min-score'
+    ];
+    
+    // Setup config listeners with interaction tracking
+    configElements.forEach(id => {
+        const element = document.getElementById(id);
+        if (element) {
+            // Track focus events
+            element.addEventListener('focus', () => {
+                trackUserInteraction(element);
+                console.log(`📝 User focused on ${id}`);
+            });
+            
+            // Track input events
+            element.addEventListener('input', () => {
+                trackUserInteraction(element);
+                console.log(`✏️ User input on ${id}`);
+            });
+            
+            // Track change events
+            element.addEventListener('change', () => {
+                trackUserInteraction(element);
+                console.log(`🔄 User changed ${id}`);
+                updateConfig();
+            });
+            
+            // For number inputs, add debounced input listener
+            if (element.type === 'number') {
+                element.addEventListener('input', debounce(() => {
+                    trackUserInteraction(element);
+                    updateConfig();
+                }, 1000));
+            }
+        }
+    });
+    
+    // Setup threshold listeners with interaction tracking
+    thresholdElements.forEach(id => {
+        const element = document.getElementById(id);
+        if (element) {
+            // Track focus events
+            element.addEventListener('focus', () => {
+                trackUserInteraction(element);
+                console.log(`📝 User focused on ${id}`);
+            });
+            
+            // Track input events
+            element.addEventListener('input', () => {
+                trackUserInteraction(element);
+                console.log(`✏️ User input on ${id}`);
+            });
+            
+            // Track change events
+            element.addEventListener('change', () => {
+                trackUserInteraction(element);
+                console.log(`🔄 User changed ${id}`);
+                updateThresholds();
+            });
+            
+            // For number inputs, add debounced input listener
+            if (element.type === 'number') {
+                element.addEventListener('input', debounce(() => {
+                    trackUserInteraction(element);
+                    updateThresholds();
+                }, 1000));
+            }
+        }
+    });
+    
+    console.log('✅ Configuration event listeners setup complete with interaction tracking');
+}
+
+// Enhanced updateConfig function with better state management
+async function updateConfig() {
+    // Check if any config elements are currently being interacted with
+    const configElementIds = ['interval-select', 'network-eth', 'network-base', 'num-wallets', 'use-interval-timeframe'];
+    const hasActiveInteraction = configElementIds.some(id => {
+        const element = document.getElementById(id);
+        return element && isUserInteracting(element);
+    });
+    
+    if (hasActiveInteraction) {
+        console.log('⏳ Delaying config update - user is actively editing');
+        // Retry after user interaction period
+        setTimeout(updateConfig, 1000);
+        return;
+    }
+    
+    const networks = [];
     const networkEth = document.getElementById('network-eth');
     const networkBase = document.getElementById('network-base');
+    
+    if (networkEth && networkEth.checked) networks.push('ethereum');
+    if (networkBase && networkBase.checked) networks.push('base');
+    
+    const intervalSelect = document.getElementById('interval-select');
     const numWallets = document.getElementById('num-wallets');
     const useIntervalTimeframe = document.getElementById('use-interval-timeframe');
     
-    // Threshold section event listeners
+    const config = {
+        check_interval_minutes: parseInt(intervalSelect?.value || 60),
+        networks: networks,
+        num_wallets: parseInt(numWallets?.value || 50),
+        use_interval_for_timeframe: useIntervalTimeframe?.checked !== false
+    };
+    
+    // Validate configuration
+    if (networks.length === 0) {
+        showToast('Please select at least one network', 'error');
+        return;
+    }
+    
+    if (config.num_wallets < 5 || config.num_wallets > 174) {
+        showToast('Number of wallets must be between 5 and 174', 'error');
+        return;
+    }
+    
+    log(`⚙️ Updating configuration...`, 'info');
+    log(`📊 New settings: ${networks.join(', ')} networks, ${config.num_wallets} wallets, ${config.check_interval_minutes}min interval`, 'info');
+    
+    // Show visual feedback
+    showConfigurationStatus('updating');
+    
+    try {
+        const data = await makeApiCall('/api/monitor/config', {
+            method: 'POST',
+            body: JSON.stringify(config)
+        });
+        
+        if (data.status === 'success') {
+            log('✅ Configuration updated successfully', 'success');
+            showToast('Configuration updated successfully', 'success');
+            showConfigurationStatus('success');
+            
+            // Don't reload status immediately to avoid overriding user changes
+            // Just mark that we don't need to update these fields for a while
+            configElementIds.forEach(id => {
+                const element = document.getElementById(id);
+                if (element) {
+                    element.dataset.lastInteraction = Date.now().toString();
+                }
+            });
+        } else {
+            log(`❌ Config update failed: ${data.message}`, 'error');
+            showToast(`Config update failed: ${data.message}`, 'error');
+            showConfigurationStatus('error');
+        }
+    } catch (error) {
+        log(`❌ Error updating config: ${error.message}`, 'error');
+        showToast('Error updating configuration', 'error');
+        showConfigurationStatus('error');
+    }
+}
+
+// Enhanced updateThresholds function with better state management
+async function updateThresholds() {
+    // Check if any threshold elements are currently being interacted with
+    const thresholdElementIds = ['min-wallets', 'min-eth', 'min-score'];
+    const hasActiveInteraction = thresholdElementIds.some(id => {
+        const element = document.getElementById(id);
+        return element && isUserInteracting(element);
+    });
+    
+    if (hasActiveInteraction) {
+        console.log('⏳ Delaying threshold update - user is actively editing');
+        // Retry after user interaction period
+        setTimeout(updateThresholds, 1000);
+        return;
+    }
+    
     const minWallets = document.getElementById('min-wallets');
     const minEth = document.getElementById('min-eth');
     const minScore = document.getElementById('min-score');
     
-    // Add change event listeners for configuration
-    if (intervalSelect) intervalSelect.addEventListener('change', updateConfig);
-    if (networkEth) networkEth.addEventListener('change', updateConfig);
-    if (networkBase) networkBase.addEventListener('change', updateConfig);
-    if (numWallets) numWallets.addEventListener('change', updateConfig);
-    if (useIntervalTimeframe) useIntervalTimeframe.addEventListener('change', updateConfig);
+    const thresholds = {
+        min_wallets: parseInt(minWallets?.value || 2),
+        min_eth_total: parseFloat(minEth?.value || 0.5),
+        min_alpha_score: parseFloat(minScore?.value || 30),
+        min_sell_score: 25.0,
+        min_transactions: 3,
+        filter_stablecoins: true
+    };
     
-    // Add change event listeners for thresholds
-    if (minWallets) minWallets.addEventListener('change', updateThresholds);
-    if (minEth) minEth.addEventListener('change', updateThresholds);
-    if (minScore) minScore.addEventListener('change', updateThresholds);
+    // Validate thresholds
+    if (thresholds.min_wallets < 1 || thresholds.min_wallets > 20) {
+        showToast('Min wallets must be between 1 and 20', 'error');
+        return;
+    }
     
-    // Add input event listeners for number inputs (for real-time updates)
-    if (numWallets) numWallets.addEventListener('input', debounce(updateConfig, 1000));
-    if (minWallets) minWallets.addEventListener('input', debounce(updateThresholds, 1000));
-    if (minEth) minEth.addEventListener('input', debounce(updateThresholds, 1000));
-    if (minScore) minScore.addEventListener('input', debounce(updateThresholds, 1000));
+    if (thresholds.min_eth_total < 0.01 || thresholds.min_eth_total > 100) {
+        showToast('Min ETH must be between 0.01 and 100', 'error');
+        return;
+    }
     
-    console.log('✅ Configuration event listeners setup complete');
+    if (thresholds.min_alpha_score < 10 || thresholds.min_alpha_score > 100) {
+        showToast('Min alpha score must be between 10 and 100', 'error');
+        return;
+    }
+    
+    log(`🎯 Updating alert thresholds...`, 'info');
+    log(`📊 New thresholds: ${thresholds.min_wallets} wallets, ${thresholds.min_eth_total} ETH, α≥${thresholds.min_alpha_score}`, 'info');
+    
+    // Show visual feedback
+    showThresholdStatus('updating');
+    
+    try {
+        const data = await makeApiCall('/api/monitor/thresholds', {
+            method: 'POST',
+            body: JSON.stringify(thresholds)
+        });
+        
+        if (data.status === 'success') {
+            log('✅ Alert thresholds updated successfully', 'success');
+            showToast('Alert thresholds updated successfully', 'success');
+            showThresholdStatus('success');
+            
+            // Mark threshold fields as recently updated
+            thresholdElementIds.forEach(id => {
+                const element = document.getElementById(id);
+                if (element) {
+                    element.dataset.lastInteraction = Date.now().toString();
+                }
+            });
+        } else {
+            log(`❌ Threshold update failed: ${data.message}`, 'error');
+            showToast(`Threshold update failed: ${data.message}`, 'error');
+            showThresholdStatus('error');
+        }
+    } catch (error) {
+        log(`❌ Error updating thresholds: ${error.message}`, 'error');
+        showToast('Error updating thresholds', 'error');
+        showThresholdStatus('error');
+    }
 }
 
 // Debounce function to prevent too many API calls

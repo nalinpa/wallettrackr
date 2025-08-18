@@ -26,6 +26,14 @@ except ImportError:
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["monitoring"])
 
+try:
+    from services.notifications import telegram_client, send_alert_notifications, check_notification_config
+    NOTIFICATIONS_AVAILABLE = True
+    logger.info("✅ Telegram notifications available")
+except ImportError as e:
+    NOTIFICATIONS_AVAILABLE = False
+    logger.warning(f"⚠️ Telegram notifications not available: {e}")
+    
 # Pydantic models for request bodies
 class MonitorConfig(BaseModel):
     check_interval_minutes: int = 60
@@ -76,17 +84,38 @@ monitoring_task = None
 
 @router.get("/monitor/status", response_model=Dict[str, Any])
 async def get_monitor_status():
-    """Get monitoring system status"""
+    """Get monitoring system status - ENHANCED WITH NOTIFICATION STATUS"""
     try:
         # Check if we have analysis capabilities
         capabilities = {
             "analysis_available": ANALYSIS_AVAILABLE,
             "monitor_available": MONITOR_AVAILABLE,
+            "notifications_available": NOTIFICATIONS_AVAILABLE,
             "networks_supported": monitor_state["config"]["networks"]
         }
         
+        # Add notification status details
+        notification_status = {
+            "available": NOTIFICATIONS_AVAILABLE,
+            "configured": False,
+            "last_test": None
+        }
+        
+        if NOTIFICATIONS_AVAILABLE:
+            try:
+                from services.notifications import check_notification_config, telegram_client
+                notification_status["configured"] = check_notification_config()
+                notification_status["bot_token_set"] = bool(telegram_client.bot_token)
+                notification_status["chat_id_set"] = bool(telegram_client.chat_id)
+            except Exception as e:
+                logger.debug(f"Error checking notification status: {e}")
+        
         # Merge capabilities with state
-        status_data = {**monitor_state, "capabilities": capabilities}
+        status_data = {
+            **monitor_state, 
+            "capabilities": capabilities,
+            "notifications": notification_status
+        }
         
         # If external monitor is available, merge its status too
         if MONITOR_AVAILABLE:
@@ -218,7 +247,7 @@ async def check_now(background_tasks: BackgroundTasks):
 
 @router.get("/monitor/test")
 async def test_connection():
-    """Test monitor connections and capabilities"""
+    """Test monitor connections and capabilities - ENHANCED WITH NOTIFICATION TEST"""
     results = {}
     
     try:
@@ -227,6 +256,24 @@ async def test_connection():
         
         # Test external monitor
         results["external_monitor"] = MONITOR_AVAILABLE
+        
+        # Test notifications
+        results["notifications_available"] = NOTIFICATIONS_AVAILABLE
+        
+        if NOTIFICATIONS_AVAILABLE:
+            try:
+                from services.notifications import check_notification_config, telegram_client
+                results["notification_config"] = check_notification_config()
+                
+                # Test Telegram connection
+                async with telegram_client:
+                    connection_ok = await telegram_client.test_connection()
+                    results["telegram_connection"] = connection_ok
+                    
+            except Exception as e:
+                logger.error(f"Notification test failed: {e}")
+                results["telegram_connection"] = False
+                results["notification_error"] = str(e)
         
         # Test network connections for each configured network
         network_tests = {}
@@ -261,16 +308,21 @@ async def test_connection():
         results["analyzers"] = analyzer_tests
         
         # Overall health check
-        all_critical_passed = (
-            results["analysis_components"] and
-            all(network_tests.values()) and
+        critical_systems = [
+            results["analysis_components"],
+            all(network_tests.values()),
             (not analyzer_tests or all(analyzer_tests.values()))
-        )
+        ]
+        
+        notification_ok = results.get("telegram_connection", False) if NOTIFICATIONS_AVAILABLE else True
+        
+        all_critical_passed = all(critical_systems)
         
         return {
             "status": "success" if all_critical_passed else "partial",
             "results": results,
-            "summary": f"Critical systems: {'✅ PASS' if all_critical_passed else '❌ FAIL'}"
+            "summary": f"Critical systems: {'✅ PASS' if all_critical_passed else '❌ FAIL'}, "
+                      f"Notifications: {'✅ OK' if notification_ok else '⚠️ CHECK CONFIG'}"
         }
         
     except Exception as e:
@@ -280,7 +332,7 @@ async def test_connection():
             "results": {"error": str(e)},
             "summary": "❌ Test failed with error"
         }
-
+        
 @router.post("/monitor/config")
 async def update_config(config: MonitorConfig):
     """Update monitor configuration"""
@@ -379,6 +431,52 @@ async def get_alerts(limit: int = 20, offset: int = 0):
         logger.error(f"Error getting alerts: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/monitor/test-notifications")
+async def test_notifications():
+    """Test the notification system"""
+    try:
+        if not NOTIFICATIONS_AVAILABLE:
+            return {
+                "status": "error",
+                "message": "Notifications not available",
+                "details": "Check if services.notifications is properly configured"
+            }
+        
+        # Check configuration
+        from services.notifications import check_notification_config, send_test_notification
+        
+        config_ok = check_notification_config()
+        if not config_ok:
+            return {
+                "status": "error", 
+                "message": "Telegram configuration invalid",
+                "details": "Check TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID environment variables"
+            }
+        
+        # Send test notification
+        success = await send_test_notification()
+        
+        if success:
+            return {
+                "status": "success",
+                "message": "Test notification sent successfully",
+                "timestamp": datetime.now().isoformat()
+            }
+        else:
+            return {
+                "status": "error",
+                "message": "Test notification failed",
+                "details": "Check server logs for specific error details"
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Test notification failed: {e}")
+        return {
+            "status": "error",
+            "message": f"Test notification error: {str(e)}",
+            "details": "Check server logs for full error details"
+        }
+        
 # Background monitoring loop
 async def monitoring_loop():
     """Main monitoring loop that runs periodic checks"""
@@ -408,9 +506,45 @@ async def monitoring_loop():
             logger.error(f"❌ Error in monitoring loop: {e}")
             await asyncio.sleep(60)  # Wait a minute before retrying
 
+def debug_ranked_tokens_structure(results, analysis_type: str):
+    """Debug function to understand ranked_tokens data structure"""
+    if not hasattr(results, 'ranked_tokens') or not results.ranked_tokens:
+        logger.info(f"No ranked_tokens to debug for {analysis_type}")
+        return
+    
+    logger.info(f"🔍 Debugging {analysis_type} ranked_tokens structure:")
+    
+    for i, token_tuple in enumerate(results.ranked_tokens[:3]):  # Check first 3
+        try:
+            if len(token_tuple) >= 3:
+                token_name, token_info, score_value = token_tuple
+                
+                logger.info(f"  Token {i+1}: {token_name}")
+                logger.info(f"    Score/ETH parameter: {score_value} (type: {type(score_value)})")
+                
+                if isinstance(token_info, dict):
+                    logger.info(f"    Token info keys: {list(token_info.keys())}")
+                    
+                    # Check for ETH value fields
+                    eth_fields = ['total_eth_spent', 'total_estimated_eth', 'total_eth_value']
+                    for field in eth_fields:
+                        if field in token_info:
+                            value = token_info[field]
+                            logger.info(f"    {field}: {value} (type: {type(value)})")
+                            
+                            # Check if it looks like wei
+                            if isinstance(value, (int, float)) and value > 1000000000000000000:
+                                converted = value / 1e18
+                                logger.info(f"      → Converted from wei: {converted}")
+                else:
+                    logger.info(f"    Token info type: {type(token_info)}, value: {token_info}")
+                    
+        except Exception as e:
+            logger.error(f"Error debugging token {i}: {e}")
+            
 # Main analysis function
 async def run_analysis_check(immediate: bool = False):
-    """Run the actual analysis check using your analyzers"""
+    """Run the actual analysis check using your analyzers - ENHANCED WITH NOTIFICATIONS"""
     global monitor_state
     
     if not ANALYSIS_AVAILABLE:
@@ -456,9 +590,15 @@ async def run_analysis_check(immediate: bool = False):
         monitor_state["alerts"].extend(new_alerts)
         monitor_state["stats"]["total_alerts"] += len(new_alerts)
         
-        # Send notifications for new alerts
+        # ENHANCED: Send notifications for new alerts
         if new_alerts:
-            await send_alert_notifications(new_alerts)
+            logger.info(f"📱 Sending notifications for {len(new_alerts)} new alerts")
+            try:
+                await send_alert_notifications(new_alerts)
+                logger.info("✅ Notifications sent successfully")
+            except Exception as notification_error:
+                logger.error(f"❌ Failed to send notifications: {notification_error}")
+                # Continue execution even if notifications fail
         
         # Keep only last 100 alerts to prevent memory bloat
         if len(monitor_state["alerts"]) > 100:
@@ -466,11 +606,12 @@ async def run_analysis_check(immediate: bool = False):
         
         logger.info(f"✅ Analysis complete: {len(new_alerts)} new alerts, {check_duration:.1f}s duration")
         
-        # Log summary of findings
+        # Log summary of findings with correct ETH values
         if new_alerts:
             for alert in new_alerts:
                 score = alert['data'].get('alpha_score') or alert['data'].get('sell_score', 0)
-                logger.info(f"🚨 {alert['alert_type'].upper()}: {alert['token']} ({alert['network']}) - Score: {score}")
+                eth_value = alert['data'].get('total_eth_spent') or alert['data'].get('total_eth_value', 0)
+                logger.info(f"🚨 {alert['alert_type'].upper()}: {alert['token']} ({alert['network']}) - ETH: {eth_value:.4f}, Score: {score}")
         
     except Exception as e:
         logger.error(f"❌ Analysis check failed: {e}")
@@ -554,7 +695,7 @@ def process_analysis_results(network: str, results: dict) -> List[dict]:
         return []
 
 def process_buy_results(network: str, results, thresholds: dict) -> List[dict]:
-    """Process buy analysis results and generate alerts"""
+    """Process buy analysis results and generate alerts - FIXED ETH VALUES"""
     alerts = []
     
     try:
@@ -575,26 +716,46 @@ def process_buy_results(network: str, results, thresholds: dict) -> List[dict]:
                 # Handle different token_info structures
                 if isinstance(token_info, dict):
                     wallet_count = len(token_info.get('wallets', set()))
-                    purchase_count = token_info.get('count', 0)
+                    purchase_count = token_info.get('total_purchases', token_info.get('count', 0))
                     platforms = token_info.get('platforms', [])
+                    
+                    # FIXED: Get the correct ETH value from token_info, not the score
+                    # The eth_value parameter is actually the alpha score, not ETH value!
+                    correct_eth_value = token_info.get('total_eth_spent', 0.0)
+                    
+                    # Validate and convert the ETH value
+                    if isinstance(correct_eth_value, (int, float)):
+                        # Check if it's in wei format (very large number)
+                        if correct_eth_value > 1000000000000000000:  # More than 1 ETH in wei
+                            correct_eth_value = correct_eth_value / 1e18
+                            logger.debug(f"🔧 Converted ETH from wei: {correct_eth_value}")
+                        
+                        # Safety cap for unrealistic values
+                        if correct_eth_value > 100:  # More than 100 ETH for single alert
+                            logger.warning(f"⚠️ Capping high ETH value for {token_name}: {correct_eth_value} -> 10.0")
+                            correct_eth_value = 10.0
+                    else:
+                        correct_eth_value = 0.0
+                        
                 else:
                     # Fallback if token_info is not a dict
                     wallet_count = 1
                     purchase_count = 1
                     platforms = ['Unknown']
+                    correct_eth_value = 0.1  # Default small value
                 
-                # Calculate alpha score with better error handling
-                alpha_score = calculate_alpha_score(wallet_count, purchase_count, eth_value)
+                # Use the eth_value as alpha score (which it actually is)
+                alpha_score = float(eth_value) if isinstance(eth_value, (int, float)) else 0.0
                 
-                logger.debug(f"Token {token_name}: wallets={wallet_count}, eth={eth_value}, score={alpha_score}")
+                logger.debug(f"Token {token_name}: wallets={wallet_count}, eth={correct_eth_value}, score={alpha_score}")
                 
-                # Apply thresholds
+                # Apply thresholds using the correct ETH value
                 if (wallet_count >= thresholds["min_wallets"] and 
-                    eth_value >= thresholds["min_eth_total"] and 
+                    correct_eth_value >= thresholds["min_eth_total"] and 
                     alpha_score >= thresholds["min_alpha_score"]):
                     
                     # Determine confidence level
-                    confidence = determine_confidence(wallet_count, eth_value, alpha_score)
+                    confidence = determine_confidence(wallet_count, correct_eth_value, alpha_score)
                     
                     alert = {
                         "id": f"{network}_{token_name}_{int(datetime.now().timestamp())}",
@@ -604,16 +765,17 @@ def process_buy_results(network: str, results, thresholds: dict) -> List[dict]:
                         "confidence": confidence,
                         "network": network,
                         "data": {
-                            "total_eth_spent": round(float(eth_value), 3),
+                            "total_eth_spent": round(float(correct_eth_value), 4),  # Use correct ETH value
                             "wallet_count": wallet_count,
                             "alpha_score": round(alpha_score, 1),
                             "total_purchases": purchase_count,
                             "platforms": platforms if isinstance(platforms, list) else ['Unknown'],
-                            "average_purchase_size": round(float(eth_value) / max(purchase_count, 1), 4)
+                            "average_purchase_size": round(float(correct_eth_value) / max(purchase_count, 1), 6),
+                            "contract_address": token_info.get('contract_address', '') if isinstance(token_info, dict) else ''
                         }
                     }
                     alerts.append(alert)
-                    logger.info(f"✅ Generated buy alert for {token_name}: score={alpha_score:.1f}")
+                    logger.info(f"✅ Generated buy alert for {token_name}: eth={correct_eth_value:.4f}, score={alpha_score:.1f}")
                 
             except Exception as token_error:
                 logger.error(f"Error processing individual token {token_name}: {token_error}")
@@ -624,9 +786,9 @@ def process_buy_results(network: str, results, thresholds: dict) -> List[dict]:
     except Exception as e:
         logger.error(f"Error processing buy results: {e}")
         return []
-
+    
 def process_sell_results(network: str, results, thresholds: dict) -> List[dict]:
-    """Process sell analysis results and generate sell pressure alerts"""
+    """Process sell analysis results and generate sell pressure alerts - FIXED ETH VALUES"""
     alerts = []
     
     try:
@@ -638,30 +800,50 @@ def process_sell_results(network: str, results, thresholds: dict) -> List[dict]:
         
         for token_data in results.ranked_tokens[:5]:  # Check top 5 for sell pressure
             try:
-                token_name, token_info, eth_value = token_data
+                token_name, token_info, sell_score = token_data
                 
                 # Debug log the structure
-                logger.debug(f"Processing sell token {token_name}: info type={type(token_info)}, eth_value={eth_value}")
+                logger.debug(f"Processing sell token {token_name}: info type={type(token_info)}, sell_score={sell_score}")
                 
                 # Handle different token_info structures  
                 if isinstance(token_info, dict):
                     wallet_count = len(token_info.get('wallets', set()))
-                    sell_count = token_info.get('count', 0)
+                    sell_count = token_info.get('total_sells', token_info.get('count', 0))
+                    
+                    # FIXED: Get the correct ETH value from token_info, not the score
+                    # The sell_score parameter is actually the sell pressure score, not ETH value!
+                    correct_eth_value = token_info.get('total_estimated_eth', 0.0)
+                    
+                    # Validate and convert the ETH value
+                    if isinstance(correct_eth_value, (int, float)):
+                        # Check if it's in wei format (very large number)
+                        if correct_eth_value > 1000000000000000000:  # More than 1 ETH in wei
+                            correct_eth_value = correct_eth_value / 1e18
+                            logger.debug(f"🔧 Converted sell ETH from wei: {correct_eth_value}")
+                        
+                        # Safety cap for unrealistic values
+                        if correct_eth_value > 100:  # More than 100 ETH for single sell alert
+                            logger.warning(f"⚠️ Capping high sell ETH value for {token_name}: {correct_eth_value} -> 10.0")
+                            correct_eth_value = 10.0
+                    else:
+                        correct_eth_value = 0.0
+                        
                 else:
                     wallet_count = 1
                     sell_count = 1
+                    correct_eth_value = 0.1  # Default small value
                 
-                # Calculate sell pressure score
-                sell_score = calculate_sell_pressure_score(wallet_count, sell_count, eth_value)
+                # Use the sell_score as the actual sell pressure score
+                sell_pressure_score = float(sell_score) if isinstance(sell_score, (int, float)) else 0.0
                 
-                logger.debug(f"Sell token {token_name}: wallets={wallet_count}, eth={eth_value}, score={sell_score}")
+                logger.debug(f"Sell token {token_name}: wallets={wallet_count}, eth={correct_eth_value}, score={sell_pressure_score}")
                 
-                # Lower threshold for sell pressure alerts
+                # Lower threshold for sell pressure alerts (using correct ETH value)
                 if (wallet_count >= max(thresholds["min_wallets"] - 1, 1) and 
-                    eth_value >= thresholds["min_eth_total"] * 0.5 and 
-                    sell_score >= 20):  # Separate threshold for sell pressure
+                    correct_eth_value >= thresholds["min_eth_total"] * 0.5 and 
+                    sell_pressure_score >= 20):  # Separate threshold for sell pressure
                     
-                    confidence = determine_sell_confidence(wallet_count, eth_value, sell_score)
+                    confidence = determine_sell_confidence(wallet_count, correct_eth_value, sell_pressure_score)
                     
                     alert = {
                         "id": f"{network}_{token_name}_sell_{int(datetime.now().timestamp())}",
@@ -671,15 +853,17 @@ def process_sell_results(network: str, results, thresholds: dict) -> List[dict]:
                         "confidence": confidence,
                         "network": network,
                         "data": {
-                            "total_eth_value": round(float(eth_value), 3),
+                            "total_eth_value": round(float(correct_eth_value), 4),  # Use correct ETH value
+                            "total_estimated_eth": round(float(correct_eth_value), 4),  # Alias for compatibility
                             "wallet_count": wallet_count,
-                            "sell_score": round(sell_score, 1),
+                            "sell_score": round(sell_pressure_score, 1),
                             "total_sells": sell_count,
-                            "methods": ["Token Transfer"]  # Simplified for sell analysis
+                            "methods": ["Token Transfer"],  # Simplified for sell analysis
+                            "contract_address": token_info.get('contract_address', '') if isinstance(token_info, dict) else ''
                         }
                     }
                     alerts.append(alert)
-                    logger.info(f"✅ Generated sell alert for {token_name}: score={sell_score:.1f}")
+                    logger.info(f"✅ Generated sell alert for {token_name}: eth={correct_eth_value:.4f}, score={sell_pressure_score:.1f}")
                 
             except Exception as token_error:
                 logger.error(f"Error processing individual sell token {token_name}: {token_error}")
@@ -690,7 +874,7 @@ def process_sell_results(network: str, results, thresholds: dict) -> List[dict]:
     except Exception as e:
         logger.error(f"Error processing sell results: {e}")
         return []
-
+    
 def calculate_alpha_score(wallet_count: int, purchase_count: int, eth_value: float) -> float:
     """Calculate alpha score for a token based on various factors"""
     try:
@@ -760,38 +944,40 @@ def determine_sell_confidence(wallet_count: int, eth_value: float, sell_score: f
         return "LOW"
 
 async def send_alert_notifications(alerts: List[dict]):
-    """Send notifications for new alerts (Telegram, Discord, etc.)"""
+    """Send notifications for new alerts - ENHANCED VERSION"""
+    if not alerts:
+        logger.debug("📱 No alerts to send")
+        return
+    
+    logger.info(f"📱 Processing notifications for {len(alerts)} alerts")
+    
+    # Check if notifications are available
+    if not NOTIFICATIONS_AVAILABLE:
+        logger.info("📱 Notification services not available - skipping")
+        return
+    
+    # Check configuration
     try:
-        # Import notification services if available
-        try:
-            from services.notifications import telegram_client
-            NOTIFICATIONS_AVAILABLE = True
-        except ImportError:
-            NOTIFICATIONS_AVAILABLE = False
-            logger.info("📱 Notification services not available")
+        from services.notifications import check_notification_config
+        if not check_notification_config():
+            logger.error("❌ Telegram configuration invalid - skipping notifications")
             return
-        
-        if not NOTIFICATIONS_AVAILABLE:
-            return
-        
-        for alert in alerts:
-            try:
-                # Format alert message
-                message = format_alert_message(alert)
-                
-                # Send to Telegram
-                try:
-                    await telegram_client.send_message(message)
-                    logger.info(f"📱 Telegram notification sent for {alert['token']}")
-                except Exception as e:
-                    logger.error(f"❌ Telegram notification failed: {e}")    
-                    
-            except Exception as e:
-                logger.error(f"❌ Error sending notification for {alert.get('token', 'unknown')}: {e}")
-                
     except Exception as e:
-        logger.error(f"❌ Error in send_alert_notifications: {e}")
-
+        logger.error(f"❌ Error checking notification config: {e}")
+        return
+    
+    try:
+        # Import here to avoid issues if not available
+        from services.notifications import send_alert_notifications as send_notifications
+        
+        # Send the notifications
+        await send_notifications(alerts)
+        
+        logger.info(f"✅ Notification processing complete for {len(alerts)} alerts")
+        
+    except Exception as e:
+        logger.error(f"❌ Error sending notifications: {e}")
+        
 def format_alert_message(alert: dict) -> str:
     """Format alert for notifications"""                          
     try:
