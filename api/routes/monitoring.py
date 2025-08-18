@@ -16,13 +16,6 @@ except ImportError as e:
     logging.warning(f"Analysis components not available: {e}")
     ANALYSIS_AVAILABLE = False
 
-# Import existing monitor if available
-try:
-    from auto_monitor import monitor
-    MONITOR_AVAILABLE = True
-except ImportError:
-    MONITOR_AVAILABLE = False
-
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["monitoring"])
 
@@ -89,7 +82,6 @@ async def get_monitor_status():
         # Check if we have analysis capabilities
         capabilities = {
             "analysis_available": ANALYSIS_AVAILABLE,
-            "monitor_available": MONITOR_AVAILABLE,
             "notifications_available": NOTIFICATIONS_AVAILABLE,
             "networks_supported": monitor_state["config"]["networks"]
         }
@@ -116,15 +108,7 @@ async def get_monitor_status():
             "capabilities": capabilities,
             "notifications": notification_status
         }
-        
-        # If external monitor is available, merge its status too
-        if MONITOR_AVAILABLE:
-            try:
-                external_status = monitor.get_status()
-                status_data = {**status_data, **external_status}
-            except Exception as e:
-                logger.warning(f"Could not get external monitor status: {e}")
-        
+                
         return {"status": "success", "data": status_data}
         
     except Exception as e:
@@ -158,19 +142,10 @@ async def start_monitor():
         # Start background monitoring task
         monitoring_task = asyncio.create_task(monitoring_loop())
         
-        # Also start external monitor if available
-        external_result = None
-        if MONITOR_AVAILABLE:
-            try:
-                external_result = monitor.start_monitoring()
-            except Exception as e:
-                logger.warning(f"External monitor start failed: {e}")
-        
         return {
             "status": "success",
             "message": f"Monitor started with {len(monitor_state['config']['networks'])} networks",
-            "config": monitor_state["config"],
-            "external_monitor": external_result
+            "config": monitor_state["config"]
         }
         
     except Exception as e:
@@ -197,18 +172,9 @@ async def stop_monitor():
             except asyncio.CancelledError:
                 pass
         
-        # Stop external monitor if available
-        external_result = None
-        if MONITOR_AVAILABLE:
-            try:
-                external_result = monitor.stop_monitoring()
-            except Exception as e:
-                logger.warning(f"External monitor stop failed: {e}")
-        
         return {
             "status": "success",
-            "message": "Monitor stopped",
-            "external_monitor": external_result
+            "message": "Monitor stopped"
         }
         
     except Exception as e:
@@ -253,9 +219,6 @@ async def test_connection():
     try:
         # Test analysis components
         results["analysis_components"] = ANALYSIS_AVAILABLE
-        
-        # Test external monitor
-        results["external_monitor"] = MONITOR_AVAILABLE
         
         # Test notifications
         results["notifications_available"] = NOTIFICATIONS_AVAILABLE
@@ -353,14 +316,6 @@ async def update_config(config: MonitorConfig):
         if monitor_state["is_running"]:
             next_check = datetime.now() + timedelta(minutes=config.check_interval_minutes)
             monitor_state["next_check"] = next_check.isoformat()
-        
-        # Update external monitor config if available
-        if MONITOR_AVAILABLE:
-            try:
-                # Update external monitor config here
-                pass
-            except Exception as e:
-                logger.warning(f"Could not update external monitor config: {e}")
         
         return {
             "status": "success",
