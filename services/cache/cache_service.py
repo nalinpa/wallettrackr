@@ -1,15 +1,13 @@
-# services/cache/cache_service.py - FastAPI-native cache service
-
 import asyncio
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 import json
 import os
+import hashlib
 from pathlib import Path
 
-from fastapi import Depends, HTTPException, BackgroundTasks
-from pydantic import BaseModel, Field
+from fastapi import Depends
 import aiofiles
 
 try:
@@ -24,373 +22,392 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# Pydantic Models
-class CacheEntry(BaseModel):
-    """Cache entry model with metadata"""
-    data: Dict[str, Any]
-    timestamp: datetime
-    network: str
-    analysis_type: str
-    ttl_seconds: int = 3600
-    orjson_optimized: bool = ORJSON_AVAILABLE
-    version: str = "2.0"
-
-class CacheMetrics(BaseModel):
-    """Cache performance metrics"""
-    hit_rate: float = 0.0
-    total_requests: int = 0
-    cache_hits: int = 0
-    cache_misses: int = 0
-    total_size_mb: float = 0.0
-    oldest_entry: Optional[datetime] = None
-    newest_entry: Optional[datetime] = None
-
-class CacheConfig(BaseModel):
-    """Cache configuration"""
-    max_age_hours: int = 24
-    max_entries: int = 100
-    persist_to_disk: bool = True
-    cache_dir: str = "cache"
-    auto_cleanup: bool = True
-    orjson_enabled: bool = ORJSON_AVAILABLE
-
 class FastAPICacheService:
-    """FastAPI-native cache service with dependency injection"""
+    """Improved cache service with better error handling and performance"""
     
-    def __init__(self, config: CacheConfig = None):
-        self.config = config or CacheConfig()
-        self._cache: Dict[str, CacheEntry] = {}
-        self._metrics = CacheMetrics()
+    def __init__(self):
+        self._cache: Dict[str, Dict] = {}
+        self._access_times: Dict[str, datetime] = {}
         self._lock = asyncio.Lock()
         
-        # Setup cache directory
-        if self.config.persist_to_disk:
-            Path(self.config.cache_dir).mkdir(exist_ok=True)
+        # Configuration
+        self.max_entries = 150  # Increased limit
+        self.max_age_hours = 24
+        self.cache_dir = Path("cache")
+        self.persist_to_disk = True
         
-        logger.info(f"🚀 FastAPI Cache Service initialized")
+        # Performance metrics
+        self._metrics = {
+            "total_requests": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "errors": 0,
+            "disk_saves": 0,
+            "disk_loads": 0
+        }
+        
+        # Setup cache directory
+        if self.persist_to_disk:
+            self.cache_dir.mkdir(exist_ok=True)
+        
+        logger.info(f"🚀 Cache service initialized")
         logger.info(f"   - orjson: {'✅ enabled' if ORJSON_AVAILABLE else '❌ disabled'}")
-        logger.info(f"   - persist: {'✅ enabled' if self.config.persist_to_disk else '❌ disabled'}")
-        logger.info(f"   - max_entries: {self.config.max_entries}")
+        logger.info(f"   - persist: {'✅ enabled' if self.persist_to_disk else '❌ disabled'}")
     
     async def get(self, key: str) -> Optional[Dict[str, Any]]:
-        """Get cached data with automatic expiry"""
+        """Get cached data with automatic cleanup"""
         async with self._lock:
-            self._metrics.total_requests += 1
+            self._metrics["total_requests"] += 1
             
-            if key not in self._cache:
-                self._metrics.cache_misses += 1
+            try:
+                # Check if key exists and is not expired
+                if key in self._cache:
+                    entry = self._cache[key]
+                    created_at = entry.get('created_at')
+                    ttl_seconds = entry.get('ttl_seconds', 3600)
+                    
+                    if created_at:
+                        age = (datetime.now() - created_at).total_seconds()
+                        if age <= ttl_seconds:
+                            # Update access time
+                            self._access_times[key] = datetime.now()
+                            self._metrics["cache_hits"] += 1
+                            logger.debug(f"✅ Cache hit: {key} (age: {age:.1f}s)")
+                            return entry['data']
+                        else:
+                            # Remove expired entry
+                            await self._remove_entry(key)
+                            logger.debug(f"⏰ Cache expired: {key} (age: {age:.1f}s)")
+                
+                # Try loading from disk if not in memory
+                if self.persist_to_disk:
+                    disk_data = await self._load_from_disk(key)
+                    if disk_data:
+                        # Add back to memory cache
+                        self._cache[key] = disk_data
+                        self._access_times[key] = datetime.now()
+                        self._metrics["cache_hits"] += 1
+                        self._metrics["disk_loads"] += 1
+                        logger.debug(f"📂 Disk cache hit: {key}")
+                        return disk_data['data']
+                
+                self._metrics["cache_misses"] += 1
                 logger.debug(f"❌ Cache miss: {key}")
                 return None
-            
-            entry = self._cache[key]
-            
-            # Check expiry
-            age_seconds = (datetime.now() - entry.timestamp).total_seconds()
-            if age_seconds > entry.ttl_seconds:
-                del self._cache[key]
-                self._metrics.cache_misses += 1
-                logger.debug(f"⏰ Cache expired: {key} (age: {age_seconds:.1f}s)")
+                
+            except Exception as e:
+                self._metrics["errors"] += 1
+                logger.error(f"❌ Cache get error: {e}")
                 return None
-            
-            self._metrics.cache_hits += 1
-            logger.debug(f"✅ Cache hit: {key} (age: {age_seconds:.1f}s)")
-            return entry.data
     
     async def set(self, key: str, data: Dict[str, Any], ttl_seconds: int = 3600, 
                   network: str = "unknown", analysis_type: str = "unknown") -> None:
-        """Set cached data with metadata"""
+        """Set cached data with better error handling"""
         async with self._lock:
-            # Create cache entry
-            entry = CacheEntry(
-                data=data,
-                timestamp=datetime.now(),
-                network=network,
-                analysis_type=analysis_type,
-                ttl_seconds=ttl_seconds,
-                orjson_optimized=ORJSON_AVAILABLE
-            )
-            
-            # Store in memory
-            self._cache[key] = entry
-            
-            # Cleanup if too many entries
-            if len(self._cache) > self.config.max_entries:
-                await self._cleanup_oldest()
-            
-            # Persist to disk if enabled
-            if self.config.persist_to_disk:
-                await self._persist_entry(key, entry)
-            
-            logger.debug(f"💾 Cached: {key} ({len(str(data))} bytes, ttl: {ttl_seconds}s)")
+            try:
+                # Create cache entry
+                entry = {
+                    'data': data,
+                    'created_at': datetime.now(),
+                    'ttl_seconds': ttl_seconds,
+                    'network': network,
+                    'analysis_type': analysis_type,
+                    'orjson_enabled': ORJSON_AVAILABLE,
+                    'size_estimate': len(str(data))
+                }
+                
+                # Store in memory
+                self._cache[key] = entry
+                self._access_times[key] = datetime.now()
+                
+                # Cleanup if needed
+                await self._cleanup_if_needed()
+                
+                # Persist to disk asynchronously
+                if self.persist_to_disk:
+                    asyncio.create_task(self._save_to_disk(key, entry))
+                
+                logger.debug(f"💾 Cached: {key} (size: {entry['size_estimate']} chars, ttl: {ttl_seconds}s)")
+                
+            except Exception as e:
+                self._metrics["errors"] += 1
+                logger.error(f"❌ Cache set error: {e}")
     
     async def delete(self, key: str) -> bool:
         """Delete cache entry"""
         async with self._lock:
-            if key in self._cache:
-                del self._cache[key]
+            try:
+                removed = False
                 
-                # Remove file if it exists
-                if self.config.persist_to_disk:
-                    file_path = Path(self.config.cache_dir) / f"{key}.json"
-                    if file_path.exists():
-                        file_path.unlink()
+                if key in self._cache:
+                    await self._remove_entry(key)
+                    removed = True
+                
+                # Remove disk file
+                if self.persist_to_disk:
+                    disk_file = self.cache_dir / f"{self._hash_key(key)}.json"
+                    if disk_file.exists():
+                        disk_file.unlink()
+                        removed = True
                 
                 logger.debug(f"🗑️ Deleted cache: {key}")
-                return True
-            return False
+                return removed
+                
+            except Exception as e:
+                self._metrics["errors"] += 1
+                logger.error(f"❌ Cache delete error: {e}")
+                return False
     
     async def clear(self, pattern: str = None) -> int:
-        """Clear cache entries, optionally by pattern"""
+        """Clear cache entries with pattern matching"""
         async with self._lock:
-            if pattern:
-                # Clear entries matching pattern
-                to_delete = [k for k in self._cache.keys() if pattern in k]
-                for key in to_delete:
-                    await self.delete(key)
-                logger.info(f"🧹 Cleared {len(to_delete)} cache entries matching '{pattern}'")
-                return len(to_delete)
-            else:
-                # Clear all
-                count = len(self._cache)
-                self._cache.clear()
-                
-                # Clear disk cache
-                if self.config.persist_to_disk:
-                    cache_dir = Path(self.config.cache_dir)
-                    for file_path in cache_dir.glob("*.json"):
-                        file_path.unlink()
-                
-                logger.info(f"🧹 Cleared all {count} cache entries")
-                return count
+            try:
+                if pattern:
+                    # Clear entries matching pattern
+                    to_delete = [k for k in self._cache.keys() if pattern in k]
+                    for key in to_delete:
+                        await self._remove_entry(key)
+                    
+                    # Clear matching disk files
+                    if self.persist_to_disk:
+                        for file_path in self.cache_dir.glob("*.json"):
+                            try:
+                                # This is basic - in production you'd want better pattern matching
+                                if pattern in file_path.name:
+                                    file_path.unlink()
+                            except Exception:
+                                pass
+                    
+                    logger.info(f"🧹 Cleared {len(to_delete)} cache entries matching '{pattern}'")
+                    return len(to_delete)
+                else:
+                    # Clear all
+                    count = len(self._cache)
+                    self._cache.clear()
+                    self._access_times.clear()
+                    
+                    # Clear disk cache
+                    if self.persist_to_disk:
+                        for file_path in self.cache_dir.glob("*.json"):
+                            try:
+                                file_path.unlink()
+                            except Exception:
+                                pass
+                    
+                    logger.info(f"🧹 Cleared all {count} cache entries")
+                    return count
+                    
+            except Exception as e:
+                self._metrics["errors"] += 1
+                logger.error(f"❌ Cache clear error: {e}")
+                return 0
     
     async def get_status(self) -> Dict[str, Any]:
-        """Get comprehensive cache status"""
+        """Get cache status with better metrics"""
         async with self._lock:
-            # Calculate metrics
-            total_size = sum(len(serialize(entry.data)) for entry in self._cache.values())
-            size_mb = total_size / (1024 * 1024)
-            
-            timestamps = [entry.timestamp for entry in self._cache.values()]
-            oldest = min(timestamps) if timestamps else None
-            newest = max(timestamps) if timestamps else None
-            
-            # Update metrics
-            self._metrics.total_size_mb = size_mb
-            self._metrics.oldest_entry = oldest
-            self._metrics.newest_entry = newest
-            if self._metrics.total_requests > 0:
-                self._metrics.hit_rate = self._metrics.cache_hits / self._metrics.total_requests
-            
-            # Get network/type breakdown
-            network_stats = {}
-            type_stats = {}
-            
-            for entry in self._cache.values():
-                network_stats[entry.network] = network_stats.get(entry.network, 0) + 1
-                type_stats[entry.analysis_type] = type_stats.get(entry.analysis_type, 0) + 1
-            
-            return {
-                "cache_entries": len(self._cache),
-                "metrics": self._metrics.dict(),
-                "config": self.config.dict(),
-                "network_breakdown": network_stats,
-                "type_breakdown": type_stats,
-                "orjson_available": ORJSON_AVAILABLE,
-                "disk_persistence": self.config.persist_to_disk
-            }
+            try:
+                # Calculate size
+                total_size = sum(entry.get('size_estimate', 0) for entry in self._cache.values())
+                size_mb = total_size / (1024 * 1024)
+                
+                # Get timestamps
+                entries = list(self._cache.values())
+                timestamps = [e['created_at'] for e in entries if 'created_at' in e]
+                oldest = min(timestamps) if timestamps else None
+                newest = max(timestamps) if timestamps else None
+                
+                # Network/type breakdown
+                network_stats = {}
+                type_stats = {}
+                
+                for entry in entries:
+                    network = entry.get('network', 'unknown')
+                    analysis_type = entry.get('analysis_type', 'unknown')
+                    network_stats[network] = network_stats.get(network, 0) + 1
+                    type_stats[analysis_type] = type_stats.get(analysis_type, 0) + 1
+                
+                return {
+                    "cache_entries": len(self._cache),
+                    "total_size_mb": round(size_mb, 2),
+                    "oldest_entry": oldest.isoformat() if oldest else None,
+                    "newest_entry": newest.isoformat() if newest else None,
+                    "network_breakdown": network_stats,
+                    "type_breakdown": type_stats,
+                    "orjson_available": ORJSON_AVAILABLE,
+                    "disk_persistence": self.persist_to_disk,
+                    "metrics": self._metrics.copy()
+                }
+                
+            except Exception as e:
+                self._metrics["errors"] += 1
+                logger.error(f"❌ Cache status error: {e}")
+                return {"error": str(e)}
     
     async def get_performance_summary(self) -> Dict[str, Any]:
-        """Get performance summary with orjson info"""
-        status = await self.get_status()
-        
-        return {
-            "hit_rate_percentage": round(self._metrics.hit_rate * 100, 1),
-            "total_requests": self._metrics.total_requests,
-            "cache_size_mb": round(self._metrics.total_size_mb, 2),
-            "orjson_enabled": ORJSON_AVAILABLE,
-            "average_entry_size_kb": round(
-                (self._metrics.total_size_mb * 1024) / max(len(self._cache), 1), 1
-            ),
-            "entries_by_network": status["network_breakdown"],
-            "entries_by_type": status["type_breakdown"]
-        }
+        """Get performance metrics"""
+        try:
+            total_requests = max(self._metrics["total_requests"], 1)
+            hit_rate = (self._metrics["cache_hits"] / total_requests) * 100
+            
+            status = await self.get_status()
+            
+            return {
+                "hit_rate_percentage": round(hit_rate, 1),
+                "total_requests": self._metrics["total_requests"],
+                "cache_size_mb": status.get("total_size_mb", 0),
+                "orjson_enabled": ORJSON_AVAILABLE,
+                "error_rate": round((self._metrics["errors"] / total_requests) * 100, 1),
+                "disk_operations": {
+                    "saves": self._metrics["disk_saves"],
+                    "loads": self._metrics["disk_loads"]
+                }
+            }
+        except Exception as e:
+            logger.error(f"❌ Performance summary error: {e}")
+            return {"error": str(e)}
     
-    async def _cleanup_oldest(self) -> None:
-        """Remove oldest cache entries to stay within limits"""
-        if len(self._cache) <= self.config.max_entries:
+    async def _cleanup_if_needed(self):
+        """Clean up old entries if cache is too large"""
+        if len(self._cache) <= self.max_entries:
             return
         
-        # Sort by timestamp and remove oldest
-        sorted_items = sorted(
-            self._cache.items(), 
-            key=lambda x: x[1].timestamp
-        )
-        
-        to_remove = len(self._cache) - self.config.max_entries + 1
-        for key, _ in sorted_items[:to_remove]:
-            await self.delete(key)
-        
-        logger.debug(f"🧹 Cleaned up {to_remove} oldest cache entries")
-    
-    async def _persist_entry(self, key: str, entry: CacheEntry) -> None:
-        """Persist cache entry to disk"""
         try:
-            file_path = Path(self.config.cache_dir) / f"{key}.json"
+            # Remove entries by LRU (least recently used)
+            sorted_by_access = sorted(
+                self._access_times.items(),
+                key=lambda x: x[1]
+            )
             
-            # Create serializable data
-            data_to_save = {
-                "entry": entry.dict(),
-                "saved_at": datetime.now().isoformat(),
-                "version": "2.0"
+            # Remove oldest entries
+            to_remove = len(self._cache) - self.max_entries + 10  # Remove a few extra
+            for key, _ in sorted_by_access[:to_remove]:
+                await self._remove_entry(key)
+            
+            logger.debug(f"🧹 Cleaned up {to_remove} old cache entries")
+            
+        except Exception as e:
+            logger.error(f"❌ Cache cleanup error: {e}")
+    
+    async def _remove_entry(self, key: str):
+        """Remove entry from memory cache"""
+        if key in self._cache:
+            del self._cache[key]
+        if key in self._access_times:
+            del self._access_times[key]
+    
+    def _hash_key(self, key: str) -> str:
+        """Create hash for disk filename"""
+        return hashlib.md5(key.encode()).hexdigest()
+    
+    async def _save_to_disk(self, key: str, entry: Dict):
+        """Save entry to disk asynchronously"""
+        try:
+            file_path = self.cache_dir / f"{self._hash_key(key)}.json"
+            
+            disk_data = {
+                "key": key,
+                "entry": {
+                    **entry,
+                    "created_at": entry["created_at"].isoformat()
+                },
+                "saved_at": datetime.now().isoformat()
             }
             
             async with aiofiles.open(file_path, 'w') as f:
-                await f.write(serialize(data_to_save))
+                await f.write(serialize(disk_data))
+            
+            self._metrics["disk_saves"] += 1
+            logger.debug(f"💾 Saved to disk: {key}")
+            
+        except Exception as e:
+            logger.error(f"❌ Disk save error for {key}: {e}")
+    
+    async def _load_from_disk(self, key: str) -> Optional[Dict]:
+        """Load entry from disk"""
+        try:
+            file_path = self.cache_dir / f"{self._hash_key(key)}.json"
+            
+            if not file_path.exists():
+                return None
+            
+            async with aiofiles.open(file_path, 'r') as f:
+                content = await f.read()
+            
+            disk_data = deserialize(content)
+            entry = disk_data["entry"]
+            
+            # Parse datetime back
+            entry["created_at"] = datetime.fromisoformat(entry["created_at"])
+            
+            # Check if still valid
+            age = (datetime.now() - entry["created_at"]).total_seconds()
+            if age <= entry.get("ttl_seconds", 3600):
+                return entry
+            else:
+                # Remove expired file
+                file_path.unlink()
+                return None
                 
         except Exception as e:
-            logger.warning(f"⚠️ Failed to persist cache entry {key}: {e}")
+            logger.error(f"❌ Disk load error for {key}: {e}")
+            return None
     
     async def load_from_disk(self) -> int:
-        """Load cache entries from disk"""
-        if not self.config.persist_to_disk:
-            return 0
-        
-        cache_dir = Path(self.config.cache_dir)
-        if not cache_dir.exists():
+        """Load all valid cache entries from disk on startup"""
+        if not self.persist_to_disk or not self.cache_dir.exists():
             return 0
         
         loaded = 0
-        for file_path in cache_dir.glob("*.json"):
-            try:
-                async with aiofiles.open(file_path, 'r') as f:
-                    content = await f.read()
-                
-                data = deserialize(content)
-                entry_data = data.get("entry", {})
-                
-                # Recreate cache entry
-                entry = CacheEntry(**entry_data)
-                
-                # Check if still valid
-                age_seconds = (datetime.now() - entry.timestamp).total_seconds()
-                if age_seconds < entry.ttl_seconds:
-                    key = file_path.stem
-                    self._cache[key] = entry
-                    loaded += 1
-                else:
-                    # Remove expired file
-                    file_path.unlink()
-                    
-            except Exception as e:
-                logger.warning(f"⚠️ Failed to load cache file {file_path}: {e}")
-                # Remove corrupted file
-                file_path.unlink()
         
-        logger.info(f"📂 Loaded {loaded} cache entries from disk")
-        return loaded
+        try:
+            for file_path in self.cache_dir.glob("*.json"):
+                try:
+                    async with aiofiles.open(file_path, 'r') as f:
+                        content = await f.read()
+                    
+                    disk_data = deserialize(content)
+                    key = disk_data["key"]
+                    entry = disk_data["entry"]
+                    
+                    # Parse datetime
+                    entry["created_at"] = datetime.fromisoformat(entry["created_at"])
+                    
+                    # Check if still valid
+                    age = (datetime.now() - entry["created_at"]).total_seconds()
+                    if age <= entry.get("ttl_seconds", 3600):
+                        self._cache[key] = entry
+                        self._access_times[key] = entry["created_at"]
+                        loaded += 1
+                    else:
+                        # Remove expired file
+                        file_path.unlink()
+                        
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to load {file_path}: {e}")
+                    # Remove corrupted file
+                    try:
+                        file_path.unlink()
+                    except Exception:
+                        pass
+            
+            logger.info(f"📂 Loaded {loaded} cache entries from disk")
+            return loaded
+            
+        except Exception as e:
+            logger.error(f"❌ Disk loading error: {e}")
+            return 0
 
 # Global cache service instance
 _cache_service: Optional[FastAPICacheService] = None
 
 def get_cache_service() -> FastAPICacheService:
-    """FastAPI dependency to get cache service"""
+    """Get cache service instance"""
     global _cache_service
     if _cache_service is None:
         _cache_service = FastAPICacheService()
     return _cache_service
 
-# Background task for cache warming
-async def warm_cache_background(
-    cache_service: FastAPICacheService, 
-    networks: List[str], 
-    wallets: int = 173, 
-    days: float = 1.0
-):
-    """Background task to warm cache"""
-    logger.info(f"🔥 Starting cache warming for {networks}")
-    
-    try:
-        # Import here to avoid circular dependencies
-        from core.analysis.buy_analyzer import BuyAnalyzer
-        from core.analysis.sell_analyzer import SellAnalyzer
-        
-        for network in networks:
-            try:
-                logger.info(f"🔥 Warming cache for {network}")
-                
-                # Run buy analysis
-                async with BuyAnalyzer(network) as analyzer:
-                    result = await analyzer.analyze_wallets_concurrent(wallets, days)
-                    
-                    if result and result.total_transactions > 0:
-                        # Cache the formatted result
-                        cache_data = {
-                            "status": "success",
-                            "network": network,
-                            "analysis_type": "buy",
-                            "total_purchases": result.total_transactions,
-                            "unique_tokens": result.unique_tokens,
-                            "total_eth_spent": result.total_eth_value,
-                            "ranked_tokens": result.ranked_tokens[:20],  # Limit size
-                            "last_updated": datetime.now().isoformat(),
-                            "from_cache_warming": True
-                        }
-                        
-                        cache_key = f"{network}_buy_{wallets}_{days}"
-                        await cache_service.set(
-                            cache_key, cache_data, 
-                            ttl_seconds=3600,  # 1 hour
-                            network=network, 
-                            analysis_type="buy"
-                        )
-                        
-                        logger.info(f"✅ Cached buy analysis for {network}")
-                
-                # Brief pause between networks
-                await asyncio.sleep(1)
-                
-            except Exception as e:
-                logger.error(f"❌ Cache warming failed for {network}: {e}")
-        
-        logger.info(f"✅ Cache warming completed for {networks}")
-        
-    except Exception as e:
-        logger.error(f"❌ Cache warming failed: {e}")
-
-# Cache decorators for FastAPI endpoints
-def cache_response(ttl_seconds: int = 3600, key_prefix: str = ""):
-    """Decorator to cache FastAPI endpoint responses"""
-    def decorator(func):
-        async def wrapper(*args, **kwargs):
-            # Get cache service
-            cache_service = get_cache_service()
-            
-            # Generate cache key from function name and args
-            cache_key = f"{key_prefix}_{func.__name__}_{hash(str(kwargs))}"
-            
-            # Try to get from cache
-            cached_result = await cache_service.get(cache_key)
-            if cached_result is not None:
-                logger.debug(f"📋 Returning cached response for {func.__name__}")
-                return cached_result
-            
-            # Execute function
-            result = await func(*args, **kwargs)
-            
-            # Cache the result
-            if result and isinstance(result, dict):
-                await cache_service.set(
-                    cache_key, result, 
-                    ttl_seconds=ttl_seconds,
-                    network=kwargs.get('network', 'unknown'),
-                    analysis_type=func.__name__
-                )
-            
-            return result
-        return wrapper
-    return decorator
-
-# FastAPI lifespan events
+# Startup/shutdown functions
 async def startup_cache_service():
     """Initialize cache service on startup"""
     cache_service = get_cache_service()
@@ -399,7 +416,4 @@ async def startup_cache_service():
 
 async def shutdown_cache_service():
     """Cleanup cache service on shutdown"""
-    cache_service = get_cache_service()
-    # Final cleanup
-    await cache_service.clear()
     logger.info("🛑 Cache service stopped")
