@@ -2,9 +2,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 import uvicorn
 import logging
 from datetime import datetime
+import os
 
 # Import your existing config
 from config.settings import settings, flask_config
@@ -44,6 +47,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Mount static files
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+if os.path.exists(static_dir):
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    logger.info(f"✅ Static files mounted from: {static_dir}")
+else:
+    logger.warning(f"⚠️ Static directory not found: {static_dir}")
+
+# Set up templates
+templates_dir = os.path.join(os.path.dirname(__file__), "templates")
+if os.path.exists(templates_dir):
+    templates = Jinja2Templates(directory=templates_dir)
+    logger.info(f"✅ Templates configured from: {templates_dir}")
+else:
+    logger.warning(f"⚠️ Templates directory not found: {templates_dir}")
     
 # Basic health check
 @app.get("/health")
@@ -61,15 +80,14 @@ from api.routes.status import router as status_router
 from api.routes.cache import router as cache_router
 from api.routes.frontend import router as frontend_router
 from api.routes.monitoring import router as monitoring_router
+from api.routes.token import router as token_router 
 
 app.include_router(analysis_router, prefix="/api")
 app.include_router(status_router, prefix="/api")
 app.include_router(cache_router, prefix="/api")
 app.include_router(frontend_router)
 app.include_router(monitoring_router, prefix="/api") 
-
-
-
+app.include_router(token_router, prefix="/api") 
 
 # Global exception handler
 @app.exception_handler(Exception)

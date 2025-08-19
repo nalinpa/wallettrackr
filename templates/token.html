@@ -1,6 +1,12 @@
 {% extends "base.html" %}
 
-{% block title %}Token Details - Crypto Alpha Analysis{% endblock %}
+{% block title %}
+  {% if token_data and token_data.metadata %}
+    {{ token_data.metadata.symbol }} - Token Details
+  {% else %}
+    Token Details
+  {% endif %} - Crypto Alpha Analysis
+{% endblock %}
 
 {% block head %}
 <style>
@@ -22,6 +28,8 @@
         border-radius: 8px;
         border-left: 3px solid #007bff;
         transition: all 0.3s ease;
+        margin-bottom: 1rem;
+        padding: 1rem;
     }
     
     .purchase-item:hover {
@@ -63,7 +71,45 @@
     .sell-pressure .stat-value {
         color: #dc3545 !important;
     }
+    
+    .info-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 0.5rem 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    
+    .info-row:last-child {
+        border-bottom: none;
+    }
+    
+    .error-state {
+        color: #dc3545;
+        text-align: center;
+        padding: 2rem;
+    }
+
+    .loading-spinner {
+        display: inline-block;
+        width: 20px;
+        height: 20px;
+        border: 3px solid rgba(255,255,255,.3);
+        border-radius: 50%;
+        border-top-color: #fff;
+        animation: spin 1s ease-in-out infinite;
+    }
+
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
 </style>
+
+<!-- Pass token data to JavaScript safely -->
+<script>
+    window.tokenPageData = {{ token_data_json | safe if token_data_json else '{}' }};
+    window.contractAddress = '{{ contract if contract else "" }}';
+    window.tokenNetwork = '{{ network if network else "ethereum" }}';
+</script>
 {% endblock %}
 
 {% block content %}
@@ -76,19 +122,33 @@
                         <i class="fas fa-home me-1"></i>Dashboard
                     </a>
                 </li>
-                <li class="breadcrumb-item active">Token Details</li>
+                <li class="breadcrumb-item active">
+                    {% if token_data and token_data.metadata and token_data.metadata.symbol %}
+                        {{ token_data.metadata.symbol }} Token Details
+                    {% else %}
+                        Token Details
+                    {% endif %}
+                </li>
             </ol>
         </nav>
     </div>
 </div>
 
+{% if token_data and token_data.status == 'success' %}
 <!-- Token Header -->
 <div class="row mb-4">
     <div class="col-12">
         <div class="token-header p-4 text-center">
-            <h1 class="display-4 mb-2" id="token-symbol">Loading...</h1>
-            <p class="lead mb-3" id="token-name"></p>
-            <span id="network-badge" class="badge bg-primary fs-6"></span>
+            <h1 class="display-4 mb-2" id="token-symbol">
+                {{ token_data.metadata.symbol if token_data.metadata.symbol else 'Unknown' }}
+            </h1>
+            <p class="lead mb-3" id="token-name">
+                {{ token_data.metadata.name if token_data.metadata.name else 'Unknown Token' }}
+            </p>
+            <span id="network-badge" class="badge {% if network == 'base' %}native-badge{% else %}bg-primary{% endif %} fs-6">
+                {{ network.upper() if network else 'ETHEREUM' }}
+                {% if token_data.is_base_native %} 🔵 Native{% endif %}
+            </span>
         </div>
     </div>
 </div>
@@ -96,19 +156,24 @@
 <!-- Action Buttons -->
 <div class="row mb-4">
     <div class="col-12">
-        <div class="d-flex flex-wrap gap-2 justify-content-center">
-            <a href="#" id="trade-link" class="btn btn-success" target="_blank">
+        <div class="d-flex flex-wrap gap-2 justify-content-center" id="action-buttons">
+            {% if contract %}
+            <a href="https://app.uniswap.org/#/swap?outputCurrency={{ contract }}&chain={{ network if network else 'ethereum' }}" 
+               class="btn btn-success" target="_blank" rel="noopener noreferrer">
                 <i class="fas fa-exchange-alt me-2"></i>Trade on Uniswap
             </a>
-            <a href="#" id="dexscreener-link" class="btn btn-warning" target="_blank">
+            <a href="https://dexscreener.com/{{ network if network else 'ethereum' }}/{{ contract }}" 
+               class="btn btn-warning" target="_blank" rel="noopener noreferrer">
                 <i class="fas fa-chart-area me-2"></i>View on DexScreener
             </a>
-            <a href="#" id="etherscan-link" class="btn btn-info" target="_blank">
-                <i class="fas fa-search me-2"></i>View on Explorer
+            <a href="{% if network == 'base' %}https://basescan.org{% else %}https://etherscan.io{% endif %}/token/{{ contract }}" 
+               class="btn btn-info" target="_blank" rel="noopener noreferrer">
+                <i class="fas fa-search me-2"></i>View on {% if network == 'base' %}BaseScan{% else %}Etherscan{% endif %}
             </a>
             <button class="btn btn-secondary" onclick="copyAddress()">
                 <i class="fas fa-copy me-2"></i>Copy Address
             </button>
+            {% endif %}
         </div>
     </div>
 </div>
@@ -122,28 +187,59 @@
                 Token Information
             </h3>
             <div class="row g-3">
-                <div class="col-md-6 col-lg-3">
-                    <div class="crypto-card p-3">
-                        <h6 class="text-muted text-uppercase mb-1">Contract Address</h6>
-                        <div class="small font-monospace text-break" id="contract-address">-</div>
+                <div class="col-md-6">
+                    <div class="info-row">
+                        <span class="text-muted">Contract Address:</span>
+                        <span class="font-monospace text-break">{{ contract if contract else 'N/A' }}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="text-muted">Network:</span>
+                        <span class="text-info">{{ network.title() if network else 'Ethereum' }}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="text-muted">Decimals:</span>
+                        <span class="text-warning">
+                            {% if token_data.metadata and token_data.metadata.decimals %}
+                                {{ token_data.metadata.decimals }}
+                            {% else %}
+                                18
+                            {% endif %}
+                        </span>
                     </div>
                 </div>
-                <div class="col-md-6 col-lg-3">
-                    <div class="crypto-card p-3">
-                        <h6 class="text-muted text-uppercase mb-1">Network</h6>
-                        <div class="h6 text-info" id="network">-</div>
+                <div class="col-md-6">
+                    <div class="info-row">
+                        <span class="text-muted">Total Supply:</span>
+                        <span class="text-success">
+                            {% if token_data.metadata and token_data.metadata.totalSupply and token_data.metadata.decimals %}
+                                {% set decimals = token_data.metadata.decimals or 18 %}
+                                {% set supply = token_data.metadata.totalSupply | int %}
+                                {% set divisor = 10 ** decimals %}
+                                {{ "{:,.0f}".format(supply / divisor) }}
+                            {% else %}
+                                Unknown
+                            {% endif %}
+                        </span>
                     </div>
-                </div>
-                <div class="col-md-6 col-lg-3">
-                    <div class="crypto-card p-3">
-                        <h6 class="text-muted text-uppercase mb-1">Decimals</h6>
-                        <div class="h6 text-warning" id="decimals">-</div>
+                    <div class="info-row">
+                        <span class="text-muted">Verification Status:</span>
+                        <span>
+                            {% if token_data.metadata and token_data.metadata.verified %}
+                                ✅ Verified
+                            {% else %}
+                                ❌ Not Verified
+                            {% endif %}
+                        </span>
                     </div>
-                </div>
-                <div class="col-md-6 col-lg-3">
-                    <div class="crypto-card p-3">
-                        <h6 class="text-muted text-uppercase mb-1">Total Supply</h6>
-                        <div class="h6 text-success" id="total-supply">-</div>
+                    <div class="info-row">
+                        <span class="text-muted">Token Type:</span>
+                        <span class="text-primary">
+                            {% if token_data.is_base_native %}
+                                Base Native 🔵
+                            {% else %}
+                                Standard ERC-20
+                            {% endif %}
+                        </span>
                     </div>
                 </div>
             </div>
@@ -152,28 +248,53 @@
 </div>
 
 <!-- Stats Row -->
-<div class="row mb-4">
+<div class="row mb-4" id="stats-row">
     <div class="col-lg-3 col-md-6 mb-3">
         <div class="stat-card p-3 text-center">
-            <div class="display-6 text-warning mb-2" id="alpha-score">-</div>
+            <div class="display-6 text-warning mb-2">
+                {% if token_data.activity and token_data.activity.alpha_score %}
+                    {{ "%.1f" | format(token_data.activity.alpha_score) }}
+                {% else %}
+                    0.0
+                {% endif %}
+            </div>
             <h6 class="text-muted text-uppercase">Alpha Score</h6>
         </div>
     </div>
     <div class="col-lg-3 col-md-6 mb-3">
         <div class="stat-card p-3 text-center">
-            <div class="display-6 text-info mb-2" id="wallet-count">-</div>
+            <div class="display-6 text-info mb-2">
+                {% if token_data.activity and token_data.activity.wallet_count %}
+                    {{ token_data.activity.wallet_count }}
+                {% else %}
+                    0
+                {% endif %}
+            </div>
             <h6 class="text-muted text-uppercase">Smart Wallets</h6>
         </div>
     </div>
     <div class="col-lg-3 col-md-6 mb-3">
         <div class="stat-card p-3 text-center">
-            <div class="display-6 text-success mb-2" id="eth-spent">-</div>
+            <div class="display-6 text-success mb-2">
+                {% if token_data.activity and token_data.activity.total_eth_spent %}
+                    {{ "%.4f" | format(token_data.activity.total_eth_spent) }}
+                {% else %}
+                    0.0000
+                {% endif %}
+                <small class="fs-6"> ETH</small>
+            </div>
             <h6 class="text-muted text-uppercase">Total ETH Spent</h6>
         </div>
     </div>
     <div class="col-lg-3 col-md-6 mb-3">
         <div class="stat-card sell-pressure p-3 text-center">
-            <div class="display-6 stat-value text-danger mb-2" id="sell-score">-</div>
+            <div class="display-6 stat-value text-danger mb-2">
+                {% if token_data.sell_pressure and token_data.sell_pressure.sell_score %}
+                    {{ "%.1f" | format(token_data.sell_pressure.sell_score) }}
+                {% else %}
+                    0.0
+                {% endif %}
+            </div>
             <h6 class="text-muted text-uppercase">Sell Pressure</h6>
         </div>
     </div>
@@ -189,27 +310,90 @@
             </h3>
             <div class="row g-3">
                 <div class="col-md-6 col-lg-3">
-                    <div class="crypto-card p-3">
-                        <h6 class="text-muted text-uppercase mb-1">Main Platforms</h6>
-                        <div class="text-info" id="main-platforms">-</div>
+                    <div class="info-row">
+                        <span class="text-muted">Main Platforms:</span>
+                        <span class="text-info">
+                            {% if token_data.activity and token_data.activity.platforms %}
+                                {{ token_data.activity.platforms[:3] | join(', ') }}
+                            {% else %}
+                                None detected
+                            {% endif %}
+                        </span>
                     </div>
                 </div>
                 <div class="col-md-6 col-lg-3">
-                    <div class="crypto-card p-3">
-                        <h6 class="text-muted text-uppercase mb-1">Last Updated</h6>
-                        <div class="text-warning" id="last-updated">-</div>
+                    <div class="info-row">
+                        <span class="text-muted">Total Purchases:</span>
+                        <span class="text-success">
+                            {% if token_data.activity and token_data.activity.total_purchases %}
+                                {{ token_data.activity.total_purchases }}
+                            {% else %}
+                                0
+                            {% endif %}
+                        </span>
                     </div>
                 </div>
                 <div class="col-md-6 col-lg-3">
-                    <div class="crypto-card p-3">
-                        <h6 class="text-muted text-uppercase mb-1">Token Type</h6>
-                        <div class="text-success" id="token-type">-</div>
+                    <div class="info-row">
+                        <span class="text-muted">Sell Methods:</span>
+                        <span class="text-danger">
+                            {% if token_data.sell_pressure and token_data.sell_pressure.methods %}
+                                {{ token_data.sell_pressure.methods[:2] | join(', ') }}
+                            {% else %}
+                                None detected
+                            {% endif %}
+                        </span>
                     </div>
                 </div>
                 <div class="col-md-6 col-lg-3">
-                    <div class="crypto-card p-3">
-                        <h6 class="text-muted text-uppercase mb-1">Sell Methods</h6>
-                        <div class="text-danger" id="sell-methods">-</div>
+                    <div class="info-row">
+                        <span class="text-muted">Last Updated:</span>
+                        <span class="text-warning">
+                            {% if token_data.last_updated %}
+                                {{ token_data.last_updated | truncate(19) }}
+                            {% else %}
+                                N/A
+                            {% endif %}
+                        </span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="row g-3 mt-3">
+                <div class="col-md-4">
+                    <div class="crypto-card p-3 text-center">
+                        <div class="h4 text-primary">
+                            {% if token_data.activity and token_data.activity.avg_wallet_score %}
+                                {{ "%.1f" | format(token_data.activity.avg_wallet_score) }}
+                            {% else %}
+                                0.0
+                            {% endif %}
+                        </div>
+                        <small class="text-muted">Average Wallet Score</small>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="crypto-card p-3 text-center">
+                        <div class="h4 text-success">
+                            {% if token_data.sell_pressure and token_data.sell_pressure.total_sells %}
+                                {{ token_data.sell_pressure.total_sells }}
+                            {% else %}
+                                0
+                            {% endif %}
+                        </div>
+                        <small class="text-muted">Total Sells Detected</small>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="crypto-card p-3 text-center">
+                        <div class="h4 text-warning">
+                            {% if token_data.sell_pressure and token_data.sell_pressure.total_eth_value %}
+                                {{ "%.4f" | format(token_data.sell_pressure.total_eth_value) }}
+                            {% else %}
+                                0.0000
+                            {% endif %} ETH
+                        </div>
+                        <small class="text-muted">Total Sell Value</small>
                     </div>
                 </div>
             </div>
@@ -226,275 +410,326 @@
                 Recent Smart Wallet Activity
             </h3>
             <div id="purchase-list" style="max-height: 600px; overflow-y: auto;">
-                <div class="text-center py-5">
-                    <div class="spinner-border text-primary mb-3" role="status">
-                        <span class="visually-hidden">Loading...</span>
+                {% if token_data.purchases and token_data.purchases | length > 0 %}
+                    {% for purchase in token_data.purchases[:20] %}
+                    <div class="purchase-item">
+                        <div class="d-flex justify-content-between align-items-start mb-3">
+                            <div>
+                                <h6 class="mb-1">
+                                    {% if purchase.wallet %}
+                                        <a href="{% if network == 'base' %}https://basescan.org{% else %}https://etherscan.io{% endif %}/address/{{ purchase.wallet }}" 
+                                           target="_blank" rel="noopener noreferrer" class="wallet-link">
+                                            <i class="fas fa-wallet me-1"></i>{{ purchase.wallet[:6] }}...{{ purchase.wallet[-4:] }}
+                                        </a>
+                                    {% else %}
+                                        <span class="text-muted">Unknown Wallet</span>
+                                    {% endif %}
+                                </h6>
+                                <small class="text-muted">Purchase #{{ loop.index }}</small>
+                            </div>
+                            <span class="badge {% if purchase.wallet_score and purchase.wallet_score > 80 %}bg-success{% elif purchase.wallet_score and purchase.wallet_score > 50 %}bg-warning{% else %}bg-secondary{% endif %}">
+                                Score: {% if purchase.wallet_score %}{{ "%.0f" | format(purchase.wallet_score) }}{% else %}0{% endif %}
+                            </span>
+                        </div>
+                        
+                        <div class="row g-2">
+                            <div class="col-md-3 col-6">
+                                <div class="text-center p-2 bg-dark rounded">
+                                    <div class="fw-bold text-warning">
+                                        {% if purchase.amount and purchase.amount >= 1000000000 %}
+                                            {{ "%.2fB" | format(purchase.amount / 1000000000) }}
+                                        {% elif purchase.amount and purchase.amount >= 1000000 %}
+                                            {{ "%.2fM" | format(purchase.amount / 1000000) }}
+                                        {% elif purchase.amount and purchase.amount >= 1000 %}
+                                            {{ "%.2fK" | format(purchase.amount / 1000) }}
+                                        {% else %}
+                                            {{ "%.2f" | format(purchase.amount or 0) }}
+                                        {% endif %}
+                                    </div>
+                                    <small class="text-muted">Amount</small>
+                                </div>
+                            </div>
+                            <div class="col-md-3 col-6">
+                                <div class="text-center p-2 bg-dark rounded">
+                                    <div class="fw-bold text-success">
+                                        {% if purchase.eth_spent %}
+                                            {{ "%.4f" | format(purchase.eth_spent) }}
+                                        {% else %}
+                                            0.0000
+                                        {% endif %} ETH
+                                    </div>
+                                    <small class="text-muted">ETH Spent</small>
+                                </div>
+                            </div>
+                            <div class="col-md-3 col-6">
+                                <div class="text-center p-2 bg-dark rounded">
+                                    <div class="fw-bold text-info">{{ purchase.platform or 'Unknown' }}</div>
+                                    <small class="text-muted">Platform</small>
+                                </div>
+                            </div>
+                            <div class="col-md-3 col-6">
+                                <div class="text-center p-2 bg-dark rounded">
+                                    {% if purchase.tx_hash %}
+                                        <a href="{% if network == 'base' %}https://basescan.org{% else %}https://etherscan.io{% endif %}/tx/{{ purchase.tx_hash }}" 
+                                           target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-outline-primary">
+                                            <i class="fas fa-external-link-alt"></i> TX
+                                        </a>
+                                    {% else %}
+                                        <span class="text-muted">No TX</span>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        {% if purchase.timestamp %}
+                        <div class="mt-2">
+                            <small class="text-muted">
+                                <i class="fas fa-clock me-1"></i>
+                                {{ purchase.timestamp | truncate(19) | replace('T', ' ') }}
+                            </small>
+                        </div>
+                        {% endif %}
                     </div>
-                    <h5>Loading activity...</h5>
+                    {% endfor %}
+                {% else %}
+                    <div class="text-center py-5">
+                        <i class="fas fa-info-circle fa-3x text-muted mb-3"></i>
+                        <h5 class="text-muted">No recent purchase data available</h5>
+                        <p class="text-muted">This could mean:</p>
+                        <ul class="list-unstyled">
+                            <li>• No smart wallets have traded this token recently</li>
+                            <li>• Token is very new or inactive</li>
+                            <li>• Analysis period may need to be extended</li>
+                        </ul>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+{% else %}
+<!-- Error State -->
+<div class="row">
+    <div class="col-12">
+        <div class="crypto-card p-4">
+            <div class="error-state">
+                <i class="fas fa-exclamation-triangle fa-3x mb-3"></i>
+                <h3>Error Loading Token Data</h3>
+                {% if token_data and token_data.error %}
+                    <p class="text-break">{{ token_data.error }}</p>
+                {% else %}
+                    <p>Unable to load token information. Please check the contract address and try again.</p>
+                {% endif %}
+                
+                <div class="mt-4">
+                    <a href="/" class="btn btn-primary me-2">
+                        <i class="fas fa-arrow-left me-2"></i>Back to Dashboard
+                    </a>
+                    <button class="btn btn-outline-primary" onclick="window.location.reload()">
+                        <i class="fas fa-redo me-2"></i>Retry
+                    </button>
                 </div>
             </div>
         </div>
     </div>
 </div>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
 <script>
-const urlParams = new URLSearchParams(window.location.search);
-const token = urlParams.get('token');
-const contract = urlParams.get('contract');
-const network = urlParams.get('network') || 'ethereum';
+// Contract address for copying
+const contractAddress = window.contractAddress || '{{ contract if contract else "" }}';
+const tokenNetwork = window.tokenNetwork || '{{ network if network else "ethereum" }}';
 
-document.addEventListener('DOMContentLoaded', function() {
-    loadTokenDetails();
-});
-
-function loadTokenDetails() {
-    if (!token && !contract) {
-        showError('No token or contract address specified');
+function copyAddress() {
+    if (!contractAddress || contractAddress.trim() === '') {
+        showToast('No contract address to copy', 'error');
         return;
     }
-
-    const contractAddress = contract || token;
     
-    // Set basic loading state
-    document.getElementById('token-symbol').textContent = contractAddress.slice(0, 10) + '...';
-    document.getElementById('network-badge').textContent = network.toUpperCase();
-    
-    // Set up links immediately
-    setupLinks(contractAddress);
-
-    // Load token data from API
-    fetch(`/api/token/${contractAddress}?network=${network}`)
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            return response.json();
-        })
-        .then(data => {
-            if (data.error) {
-                throw new Error(data.error);
-            }
-            displayTokenData(data);
-        })
-        .catch(error => {
-            console.error('Error loading token details:', error);
-            showError(error.message);
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(contractAddress).then(() => {
+            showToast('Contract address copied to clipboard!', 'success');
+        }).catch(err => {
+            fallbackCopy();
         });
+    } else {
+        fallbackCopy();
+    }
 }
 
-function displayTokenData(data) {
-    console.log('Token data:', data);
-    
-    // Basic token info
-    if (data.metadata) {
-        const symbol = data.metadata.symbol || 'Unknown';
-        const name = data.metadata.name || 'Unknown Token';
+function fallbackCopy() {
+    try {
+        const textArea = document.createElement('textarea');
+        textArea.value = contractAddress;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-999999px';
+        textArea.style.opacity = '0';
         
-        document.getElementById('token-symbol').textContent = symbol;
-        document.getElementById('token-name').textContent = name;
-        document.getElementById('decimals').textContent = data.metadata.decimals || '18';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
         
-        if (data.metadata.totalSupply) {
-            const supply = parseInt(data.metadata.totalSupply) / Math.pow(10, data.metadata.decimals || 18);
-            document.getElementById('total-supply').textContent = formatNumber(supply);
+        const success = document.execCommand('copy');
+        
+        if (success) {
+            showToast('Contract address copied to clipboard!', 'success');
+        } else {
+            showToast('Failed to copy address', 'error');
         }
-    }
-    
-    // Contract and network info
-    document.getElementById('contract-address').textContent = data.contract_address;
-    document.getElementById('network').textContent = (data.network || 'ethereum').charAt(0).toUpperCase() + (data.network || 'ethereum').slice(1);
-    
-    // Network badge styling
-    const networkBadge = document.getElementById('network-badge');
-    if (data.network === 'base') {
-        networkBadge.classList.add('native-badge');
-    }
-    if (data.is_base_native) {
-        networkBadge.textContent += ' 🔵 Native';
-    }
-    
-    // Activity data
-    if (data.activity) {
-        document.getElementById('wallet-count').textContent = data.activity.wallet_count || '0';
-        document.getElementById('eth-spent').textContent = (data.activity.total_eth_spent || 0).toFixed(4) + ' ETH';
-        document.getElementById('alpha-score').textContent = (data.activity.alpha_score || 0).toFixed(1);
         
-        const platforms = data.activity.platforms || [];
-        document.getElementById('main-platforms').textContent = platforms.slice(0, 3).join(', ') || '-';
-    }
-    
-    // Sell pressure data
-    if (data.sell_pressure) {
-        document.getElementById('sell-score').textContent = (data.sell_pressure.sell_score || 0).toFixed(1);
+        document.body.removeChild(textArea);
         
-        const methods = data.sell_pressure.methods || [];
-        document.getElementById('sell-methods').textContent = methods.slice(0, 3).join(', ') || '-';
+    } catch (err) {
+        showToast('Copy not supported in this browser', 'error');
+        // Last resort - show the address in an alert
+        alert('Contract Address: ' + contractAddress);
     }
-    
-    // Token type
-    document.getElementById('token-type').textContent = data.is_base_native ? 'Base Native 🔵' : 'Standard Token';
-    
-    // Last updated
-    if (data.last_updated) {
-        document.getElementById('last-updated').textContent = new Date(data.last_updated).toLocaleString();
-    }
-    
-    // Display purchases
-    displayPurchases(data.purchases || [], data.network);
 }
 
-function setupLinks(contractAddress) {
-    const network = urlParams.get('network') || 'ethereum';
-    const explorerBase = network === 'base' ? 'https://basescan.org' : 'https://etherscan.io';
+function showToast(message, type = 'info') {
+    // Remove existing toasts
+    const existingToasts = document.querySelectorAll('.toast');
+    existingToasts.forEach(toast => toast.remove());
     
-    // Uniswap trade link
-    const uniswapUrl = `https://app.uniswap.org/#/swap?outputCurrency=${contractAddress}&chain=${network}`;
-    document.getElementById('trade-link').href = uniswapUrl;
-
-    // DexScreener link
-    const dexScreenerUrl = `https://dexscreener.com/${network}/${contractAddress}`;
-    document.getElementById('dexscreener-link').href = dexScreenerUrl;
-
-    // Explorer link
-    const explorerUrl = `${explorerBase}/token/${contractAddress}`;
-    document.getElementById('etherscan-link').href = explorerUrl;
-    document.getElementById('etherscan-link').innerHTML = network === 'base' ? 
-        '<i class="fas fa-search me-2"></i>View on BaseScan' : 
-        '<i class="fas fa-search me-2"></i>View on Etherscan';
-}
-
-function displayPurchases(purchases, network) {
-    const container = document.getElementById('purchase-list');
+    const colorClass = type === 'success' ? 'success' : type === 'error' ? 'danger' : 'primary';
+    const iconClass = type === 'success' ? 'check' : type === 'error' ? 'times' : 'info';
     
-    if (purchases.length === 0) {
-        container.innerHTML = `
-            <div class="text-center py-5">
-                <i class="fas fa-info-circle fa-3x text-muted mb-3"></i>
-                <h5 class="text-muted">No recent purchase data available</h5>
-            </div>
-        `;
-        return;
-    }
-
-    let html = '';
-    const explorerBase = network === 'base' ? 'https://basescan.org' : 'https://etherscan.io';
-    
-    purchases.slice(0, 20).forEach((purchase, index) => {
-        const walletShort = purchase.wallet.slice(0, 6) + '...' + purchase.wallet.slice(-4);
-        
-        html += `
-                            <div class="d-flex justify-content-between align-items-start mb-3">
-                    <div>
-                        <h6 class="mb-1">
-                            <a href="${explorerBase}/address/${purchase.wallet}" target="_blank" class="wallet-link">
-                                <i class="fas fa-wallet me-1"></i>${walletShort}
-                            </a>
-                        </h6>
-                        <small class="text-muted">Purchase #${index + 1}</small>
-                    </div>
-                    <span class="badge bg-info">
-                        Score: ${purchase.wallet_score || '-'}
-                    </span>
+    const toastHtml = `
+        <div class="toast align-items-center text-white bg-${colorClass} border-0" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="d-flex">
+                <div class="toast-body">
+                    <i class="fas fa-${iconClass} me-2"></i>
+                    ${message}
                 </div>
-                
-                <div class="row g-2 mb-3">
-                    <div class="col-md-3 col-6">
-                        <div class="text-center p-2 bg-dark rounded">
-                            <div class="fw-bold text-warning">${formatNumber(purchase.amount || 0)}</div>
-                            <small class="text-muted">Amount</small>
-                        </div>
-                    </div>
-                    <div class="col-md-3 col-6">
-                        <div class="text-center p-2 bg-dark rounded">
-                            <div class="fw-bold text-success">${(purchase.eth_spent || 0).toFixed(4)} ETH</div>
-                            <small class="text-muted">ETH Spent</small>
-                        </div>
-                    </div>
-                    <div class="col-md-3 col-6">
-                        <div class="text-center p-2 bg-dark rounded">
-                            <div class="fw-bold text-info">${purchase.platform || 'Unknown'}</div>
-                            <small class="text-muted">Platform</small>
-                        </div>
-                    </div>
-                    <div class="col-md-3 col-6">
-                        <div class="text-center p-2 bg-dark rounded">
-                            ${purchase.tx_hash ? `
-                                <a href="${explorerBase}/tx/${purchase.tx_hash}" target="_blank" class="btn btn-sm btn-outline-primary">
-                                    <i class="fas fa-external-link-alt"></i> TX
-                                </a>
-                            ` : '<span class="text-muted">No TX</span>'}
-                        </div>
-                    </div>
-                </div>
-            </div>
-        `;
-    });
-
-    container.innerHTML = html;
-}
-
-function showError(message) {
-    document.getElementById('token-symbol').textContent = 'Error';
-    document.getElementById('token-name').textContent = message;
-    
-    const container = document.getElementById('purchase-list');
-    container.innerHTML = `
-        <div class="text-center py-5">
-            <div class="alert alert-danger" role="alert">
-                <i class="fas fa-exclamation-triangle fa-2x mb-3"></i>
-                <h4 class="alert-heading">Error Loading Token Data</h4>
-                <p>${message}</p>
-                <hr>
-                <a href="/" class="btn btn-primary">
-                    <i class="fas fa-arrow-left me-2"></i>Back to Dashboard
-                </a>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
             </div>
         </div>
     `;
+    
+    let container = document.getElementById('toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toast-container';
+        container.className = 'toast-container position-fixed top-0 end-0 p-3';
+        container.style.zIndex = '9999';
+        document.body.appendChild(container);
+    }
+    
+    const toastWrapper = document.createElement('div');
+    toastWrapper.innerHTML = toastHtml;
+    const toastNode = toastWrapper.firstElementChild;
+    container.appendChild(toastNode);
+    
+    // Check if Bootstrap toast is available
+    if (typeof bootstrap !== 'undefined' && bootstrap.Toast) {
+        try {
+            const bsToast = new bootstrap.Toast(toastNode);
+            bsToast.show();
+        } catch (e) {
+            manualToastDisplay(toastNode);
+        }
+    } else {
+        manualToastDisplay(toastNode);
+    }
+    
+    // Auto-remove after 5 seconds
+    setTimeout(() => {
+        if (toastNode && container.contains(toastNode)) {
+            container.removeChild(toastNode);
+        }
+    }, 5000);
 }
 
-function copyAddress() {
-    const address = urlParams.get('contract') || urlParams.get('token');
-    if (address) {
-        navigator.clipboard.writeText(address).then(() => {
-            // Show Bootstrap toast
-            const toastHtml = `
-                <div class="toast align-items-center text-white bg-success border-0 position-fixed" style="top: 20px; right: 20px; z-index: 9999;" role="alert">
-                    <div class="d-flex">
-                        <div class="toast-body">
-                            <i class="fas fa-check me-2"></i>Contract address copied to clipboard!
-                        </div>
-                        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
-                    </div>
-                </div>
-            `;
-            
-            const toastElement = document.createElement('div');
-            toastElement.innerHTML = toastHtml;
-            document.body.appendChild(toastElement.firstElementChild);
-            
-            const toast = new bootstrap.Toast(toastElement.firstElementChild);
-            toast.show();
-            
+function manualToastDisplay(toastNode) {
+    toastNode.style.display = 'block';
+    toastNode.style.opacity = '1';
+    
+    // Add click handler for close button
+    const closeBtn = toastNode.querySelector('.btn-close');
+    if (closeBtn) {
+        closeBtn.addEventListener('click', () => {
+            toastNode.style.opacity = '0';
             setTimeout(() => {
-                if (toastElement.firstElementChild) {
-                    document.body.removeChild(toastElement.firstElementChild);
+                if (toastNode.parentNode) {
+                    toastNode.parentNode.removeChild(toastNode);
                 }
-            }, 3000);
-        }).catch(err => {
-            console.error('Failed to copy: ', err);
-            alert('Failed to copy address');
+            }, 300);
         });
     }
+    
+    // Auto-fade after 3 seconds
+    setTimeout(() => {
+        toastNode.style.opacity = '0';
+        setTimeout(() => {
+            if (toastNode.parentNode) {
+                toastNode.parentNode.removeChild(toastNode);
+            }
+        }, 300);
+    }, 3000);
 }
 
-function formatNumber(num) {
-    if (num >= 1e9) return (num / 1e9).toFixed(2) + 'B';
-    if (num >= 1e6) return (num / 1e6).toFixed(2) + 'M';
-    if (num >= 1e3) return (num / 1e3).toFixed(2) + 'K';
-    return num.toFixed(2);
+// Enhanced keyboard shortcuts
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'F5' || (e.ctrlKey && e.key === 'r')) {
+        e.preventDefault();
+        showToast('Refreshing token data...', 'info');
+        setTimeout(() => {
+            window.location.reload();
+        }, 500);
+    }
+    
+    if (e.ctrlKey && e.key === 'c' && !window.getSelection().toString()) {
+        e.preventDefault();
+        copyAddress();
+    }
+});
+
+// Initialize token data if available
+document.addEventListener('DOMContentLoaded', function() {
+    if (window.tokenPageData && typeof window.tokenPageData === 'object') {
+        // Token data loaded successfully
+        if (window.tokenPageData.status === 'success') {
+            const symbol = window.tokenPageData.metadata?.symbol || 'Unknown';
+            const name = window.tokenPageData.metadata?.name || 'Unknown';
+            // Token page loaded successfully (silent)
+        } else if (window.tokenPageData.status === 'error') {
+            // Error state (handled by template)
+        }
+    }
+    
+    // Check if contract address is available for copy functionality
+    if (contractAddress && contractAddress.trim() !== '') {
+        // Contract address available for copying
+    }
+});
+
+// Refresh token data function
+function refreshTokenData() {
+    showToast('Refreshing token data...', 'info');
+    
+    setTimeout(() => {
+        window.location.reload();
+    }, 500);
 }
+
+// Export functions for global access
+window.tokenPageFunctions = {
+    copyAddress,
+    refreshTokenData,
+    showToast
+};
+
+// Error handling for uncaught errors
+window.addEventListener('error', function(e) {
+    // Silent error handling - errors are logged but don't spam console
+});
+
+// Handle promise rejections
+window.addEventListener('unhandledrejection', function(e) {
+    // Silent error handling
+});
 </script>
 {% endblock %}

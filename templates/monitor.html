@@ -1071,7 +1071,7 @@ function renderAlerts(alerts, newAlerts = []) {
                         <button class="quick-action-btn" onclick="copyAlertContract('${contractAddress}')" title="Copy contract">
                             <i class="fas fa-copy"></i>
                         </button>
-                        <button class="quick-action-btn" onclick="window.open('${explorerUrl}', '_blank')" title="View on explorer">
+                        <button class="quick-action-btn" onclick="window.open('/token?contract=${contractAddress}', '_blank')" title="View on explorer">
                             <i class="fas fa-external-link-alt"></i>
                         </button>
                         <button class="quick-action-btn" onclick="window.open('https://dexscreener.com/${network}/${contractAddress}', '_blank')" title="DexScreener">
@@ -1317,9 +1317,7 @@ function getExplorerUrl(contractAddress, network) {
     if (!contractAddress) return '#';
     const explorers = {
         'ethereum': `https://etherscan.io/address/${contractAddress}`,
-        'base': `https://basescan.org/address/${contractAddress}`,
-        'arbitrum': `https://arbiscan.io/address/${contractAddress}`,
-        'polygon': `https://polygonscan.com/address/${contractAddress}`
+        'base': `https://basescan.org/address/${contractAddress}`
     };
     return explorers[network] || explorers['ethereum'];
 }
