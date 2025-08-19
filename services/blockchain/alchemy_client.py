@@ -319,7 +319,7 @@ class AlchemyClient:
             
             # Brief pause between batches
             if i + batch_size < len(tasks):
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.3)
 
         print(f"✅ Completed batch processing for {len(addresses)} addresses")
         return all_results

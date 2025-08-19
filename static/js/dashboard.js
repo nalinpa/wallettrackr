@@ -1,431 +1,377 @@
-// Dashboard JavaScript for Crypto Alpha Analysis
-
-class Dashboard {
+class FastAPIAnalysisConsole {
     constructor() {
-        this.refreshInterval = null;
-        this.isLoading = false;
+        this.console = document.getElementById('console');
+        this.runButton = document.getElementById('runAnalysis');
+        this.networkSelect = document.getElementById('networkSelect');
+        this.walletsInput = document.getElementById('walletsInput');
+        this.daysInput = document.getElementById('daysInput');
+        this.analysisTypeSelect = document.getElementById('analysisTypeSelect');
+        this.isRunning = false;
+        this.eventSource = null;
+        
+        this.init();
     }
-
+    
     init() {
-        this.setupEventListeners();
-        this.loadWalletData();
-        this.startAutoRefresh();
-    }
-
-    setupEventListeners() {
-        // Add wallet form
-        $('#add-wallet-form').on('submit', (e) => {
-            e.preventDefault();
-            this.addWallet();
-        });
-
-        // View mode toggle
-        $('input[name="view-mode"]').change((e) => {
-            this.toggleViewMode(e.target.id);
-        });
-
-        // Global refresh button
-        $('#refresh-all').click(() => {
-            this.refreshAll();
-        });
-    }
-
-    async addWallet() {
-        const address = $('#wallet-address').val().trim();
-        const network = $('#wallet-network').val();
-
-        if (!address) {
-            this.showAlert('Please enter a wallet address', 'warning');
-            return;
+        if (this.runButton) {
+            this.runButton.addEventListener('click', () => this.startAnalysis());
         }
-
-        if (!this.isValidAddress(address)) {
-            this.showAlert('Please enter a valid wallet address', 'error');
-            return;
-        }
-
-        this.setLoading(true);
-
-        try {
-            const response = await fetch('/api/add_wallet', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    address: address,
-                    network: network
-                })
-            });
-
-            const result = await response.json();
-
-            if (response.ok && result.success) {
-                this.showAlert('Wallet added successfully!', 'success');
-                $('#wallet-address').val('');
-                await this.loadWalletData();
-            } else {
-                this.showAlert(result.error || 'Failed to add wallet', 'error');
-            }
-        } catch (error) {
-            console.error('Error adding wallet:', error);
-            this.showAlert('Network error. Please try again.', 'error');
-        } finally {
-            this.setLoading(false);
-        }
-    }
-
-    async removeWallet(address) {
-        if (!confirm(`Are you sure you want to remove wallet ${address.substring(0, 10)}...?`)) {
-            return;
-        }
-
-        this.setLoading(true);
-
-        try {
-            const response = await fetch('/api/remove_wallet', {
-                method: 'DELETE',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ address: address })
-            });
-
-            const result = await response.json();
-
-            if (response.ok && result.success) {
-                this.showAlert('Wallet removed successfully!', 'success');
-                await this.loadWalletData();
-            } else {
-                this.showAlert(result.error || 'Failed to remove wallet', 'error');
-            }
-        } catch (error) {
-            console.error('Error removing wallet:', error);
-            this.showAlert('Network error. Please try again.', 'error');
-        } finally {
-            this.setLoading(false);
-        }
-    }
-
-    async refreshWallet(address) {
-        this.setLoading(true);
         
-        try {
-            const response = await fetch(`/api/wallet/${address}/refresh`, {
-                method: 'POST'
-            });
-
-            const result = await response.json();
-
-            if (response.ok && result.success) {
-                this.showAlert('Wallet data refreshed!', 'success');
-                await this.loadWalletData();
-            } else {
-                this.showAlert(result.error || 'Failed to refresh wallet', 'error');
-            }
-        } catch (error) {
-            console.error('Error refreshing wallet:', error);
-            this.showAlert('Network error. Please try again.', 'error');
-        } finally {
-            this.setLoading(false);
+        // Add some default values if inputs exist
+        if (this.walletsInput && !this.walletsInput.value) {
+            this.walletsInput.value = '173';
         }
-    }
-
-    async loadWalletData() {
-        this.setLoading(true);
-
-        try {
-            const response = await fetch('/api/wallets');
-            const data = await response.json();
-
-            if (response.ok) {
-                this.renderWallets(data.wallets);
-                this.updateStats(data.wallets);
-            } else {
-                console.error('Failed to load wallet data:', data.error);
-                this.showAlert('Failed to load wallet data', 'error');
-            }
-        } catch (error) {
-            console.error('Error loading wallets:', error);
-            this.showAlert('Network error loading wallets', 'error');
-        } finally {
-            this.setLoading(false);
+        if (this.daysInput && !this.daysInput.value) {
+            this.daysInput.value = '1.0';
         }
-    }
-
-    renderWallets(wallets) {
-        const container = $('#wallets-container');
         
-        if (!wallets || wallets.length === 0) {
-            container.html(`
-                <div class="col-12">
-                    <div class="card">
-                        <div class="card-body text-center py-5">
-                            <i class="fas fa-wallet fa-3x text-muted mb-3"></i>
-                            <h5>No wallets tracked yet</h5>
-                            <p class="text-muted">Add your first wallet address above to start tracking alpha opportunities.</p>
-                        </div>
-                    </div>
-                </div>
-            `);
+        this.log('💡 FastAPI Analysis Console Ready', 'info');
+        this.log('📡 Select network and parameters, then click "Run Analysis"', 'info');
+    }
+    
+    startAnalysis() {
+        if (this.isRunning) {
+            this.stopAnalysis();
             return;
         }
-
-        const walletsHtml = wallets.map(wallet => this.renderWalletCard(wallet)).join('');
-        container.html(walletsHtml);
+        
+        // Get parameters
+        const network = this.networkSelect?.value || 'ethereum';
+        const wallets = this.walletsInput?.value || '173';
+        const days = this.daysInput?.value || '1.0';
+        const analysisType = this.analysisTypeSelect?.value || 'buy';
+        
+        // Validate parameters
+        if (parseInt(wallets) < 1 || parseInt(wallets) > 500) {
+            this.log('❌ Wallets must be between 1 and 500', 'error');
+            return;
+        }
+        
+        if (parseFloat(days) < 0.1 || parseFloat(days) > 7.0) {
+            this.log('❌ Days must be between 0.1 and 7.0', 'error');
+            return;
+        }
+        
+        this.log(`🚀 Starting ${analysisType} analysis for ${network}...`, 'info');
+        this.log(`📊 Parameters: ${wallets} wallets, ${days} days`, 'info');
+        
+        // Update UI
+        this.setRunning(true);
+        
+        // Build streaming URL for FastAPI
+        const streamUrl = `/api/${network}/${analysisType}/stream?wallets=${wallets}&days=${days}&use_cache=true`;
+        
+        this.log(`📡 Connecting to: ${streamUrl}`, 'debug');
+        
+        // Start EventSource connection
+        this.eventSource = new EventSource(streamUrl);
+        
+        this.eventSource.onopen = () => {
+            this.log('✅ Connected to analysis stream', 'success');
+        };
+        
+        this.eventSource.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                this.handleStreamData(data);
+            } catch (error) {
+                this.log(`❌ Parse error: ${error.message}`, 'error');
+                console.error('Stream parse error:', error, event.data);
+            }
+        };
+        
+        this.eventSource.onerror = (error) => {
+            this.log('❌ Stream connection error', 'error');
+            console.error('EventSource error:', error);
+            this.setRunning(false);
+        };
     }
-
-    renderWalletCard(wallet) {
-        const profitClass = wallet.profit_24h > 0 ? 'profit-positive' : 'profit-negative';
-        const statusBadge = wallet.is_active ? 'bg-success">Active' : 'bg-secondary">Inactive';
-        const networkBadge = this.getNetworkBadge(wallet.network);
-
-        return `
-        <div class="col-lg-4 col-md-6 mb-4">
-            <div class="card wallet-card h-100" data-wallet="${wallet.address}">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <h6 class="mb-0">
-                        <i class="fas fa-wallet me-2"></i>
-                        ${wallet.address.substring(0, 8)}...${wallet.address.substring(wallet.address.length - 6)}
-                    </h6>
-                    <div class="dropdown">
-                        <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="dropdown">
-                            <i class="fas fa-ellipsis-v"></i>
-                        </button>
-                        <ul class="dropdown-menu dropdown-menu-dark">
-                            <li><a class="dropdown-item" href="#" onclick="dashboard.viewWalletDetails('${wallet.address}')">
-                                <i class="fas fa-eye me-2"></i>View Details
-                            </a></li>
-                            <li><a class="dropdown-item" href="#" onclick="dashboard.refreshWallet('${wallet.address}')">
-                                <i class="fas fa-sync me-2"></i>Refresh
-                            </a></li>
-                            <li><a class="dropdown-item" href="${wallet.etherscan_url || '#'}" target="_blank">
-                                <i class="fas fa-external-link-alt me-2"></i>Etherscan
-                            </a></li>
-                            <li><hr class="dropdown-divider"></li>
-                            <li><a class="dropdown-item text-danger" href="#" onclick="dashboard.removeWallet('${wallet.address}')">
-                                <i class="fas fa-trash me-2"></i>Remove
-                            </a></li>
-                        </ul>
-                    </div>
-                </div>
+    
+    handleStreamData(data) {
+        const { type, processed, total, percentage, message, wallet_address, purchases_found, error } = data;
+        
+        switch (type) {
+            case 'progress':
+                if (message) {
+                    this.log(`⏳ ${message}`, 'info');
+                }
+                if (processed !== undefined && total !== undefined) {
+                    this.log(`📊 Progress: ${processed}/${total} (${percentage || 0}%)`, 'progress');
+                }
+                if (wallet_address) {
+                    this.log(`🔍 Processing: ${wallet_address.substring(0, 8)}... (${purchases_found || 0} purchases)`, 'debug');
+                }
+                break;
                 
-                <div class="card-body">
-                    <div class="mb-2">
-                        <span class="badge ${networkBadge}">${wallet.network ? wallet.network.charAt(0).toUpperCase() + wallet.network.slice(1) : 'Unknown'}</span>
-                        <span class="badge ${statusBadge}</span>
-                    </div>
-                    
-                    <div class="mb-3">
-                        <small class="text-muted">ETH Balance</small>
-                        <h5 class="mb-1">
-                            ${wallet.balance ? parseFloat(wallet.balance).toFixed(4) + ' ETH' : '<span class="text-muted">Loading...</span>'}
-                        </h5>
-                        ${wallet.balance_usd ? `<small class="text-success">${parseFloat(wallet.balance_usd).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</small>` : ''}
-                    </div>
-                    
-                    <div class="mb-3">
-                        <small class="text-muted">Recent Transactions</small>
-                        <div class="mt-1">
-                            ${wallet.recent_transactions ? `<small class="text-info">${wallet.recent_transactions} in 24h</small>` : '<small class="text-muted">No recent activity</small>'}
-                        </div>
-                    </div>
-                    
-                    ${wallet.alpha_score ? `
-                    <div class="mb-3">
-                        <div class="d-flex justify-content-between align-items-center">
-                            <small class="text-muted">Alpha Score</small>
-                            <span class="badge bg-${wallet.alpha_score > 70 ? 'success' : wallet.alpha_score > 40 ? 'warning' : 'danger'}">
-                                ${wallet.alpha_score}/100
-                            </span>
-                        </div>
-                        <div class="progress mt-1" style="height: 4px;">
-                            <div class="progress-bar bg-${wallet.alpha_score > 70 ? 'success' : wallet.alpha_score > 40 ? 'warning' : 'danger'}" 
-                                 style="width: ${wallet.alpha_score}%"></div>
-                        </div>
-                    </div>
-                    ` : ''}
-                    
-                    <div class="text-end">
-                        <small class="text-muted">
-                            <i class="fas fa-clock me-1"></i>
-                            Updated ${wallet.last_updated || 'never'}
-                        </small>
-                    </div>
-                </div>
+            case 'results':
+                this.log('📋 Analysis complete! Processing results...', 'success');
+                this.displayResults(data.data);
+                break;
                 
-                <div class="card-footer bg-transparent">
-                    <div class="btn-group w-100" role="group">
-                        <button type="button" class="btn btn-sm btn-outline-primary" 
-                                onclick="dashboard.startMonitoring('${wallet.address}')">
-                            <i class="fas fa-play me-1"></i>Monitor
-                        </button>
-                        <button type="button" class="btn btn-sm btn-outline-info" 
-                                onclick="dashboard.viewTransactions('${wallet.address}')">
-                            <i class="fas fa-list me-1"></i>Transactions
-                        </button>
-                        <button type="button" class="btn btn-sm btn-outline-success" 
-                                onclick="dashboard.analyzeWallet('${wallet.address}')">
-                            <i class="fas fa-chart-bar me-1"></i>Analyze
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-        `;
-    }
-
-    getNetworkBadge(network) {
-        switch(network) {
-            case 'ethereum': return 'bg-primary';
-            case 'base': return 'bg-info';
-            case 'arbitrum': return 'bg-warning';
-            default: return 'bg-secondary';
+            case 'complete':
+                this.log('✅ Analysis finished successfully', 'success');
+                this.setRunning(false);
+                break;
+                
+            case 'error':
+                this.log(`❌ Error: ${error || 'Unknown error'}`, 'error');
+                this.setRunning(false);
+                break;
+                
+            default:
+                this.log(`📡 Received: ${JSON.stringify(data)}`, 'debug');
         }
     }
-
-    updateStats(wallets) {
-        $('#total-wallets').text(wallets ? wallets.length : 0);
-        
-        const activeWallets = wallets ? wallets.filter(w => w.is_active).length : 0;
-        $('#active-monitors').text(activeWallets);
-        
-        $('#last-update').text(new Date().toLocaleString());
-    }
-
-    async startMonitoring(address) {
-        try {
-            const response = await fetch('/api/start_monitoring', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ address: address })
-            });
-
-            const result = await response.json();
-
-            if (response.ok && result.success) {
-                this.showAlert('Monitoring started!', 'success');
-                await this.loadWalletData();
-            } else {
-                this.showAlert(result.error || 'Failed to start monitoring', 'error');
-            }
-        } catch (error) {
-            console.error('Error starting monitoring:', error);
-            this.showAlert('Network error. Please try again.', 'error');
+    
+    displayResults(results) {
+        if (!results) {
+            this.log('⚠️ No results data received', 'warning');
+            return;
         }
-    }
-
-    viewWalletDetails(address) {
-        window.location.href = `/wallet/${address}`;
-    }
-
-    viewTransactions(address) {
-        // Open transactions in new tab/modal
-        const url = `https://etherscan.io/address/${address}`;
-        window.open(url, '_blank');
-    }
-
-    analyzeWallet(address) {
-        // Future feature - wallet analysis
-        this.showAlert('Wallet analysis feature coming soon!', 'info');
-    }
-
-    toggleViewMode(mode) {
-        const container = $('#wallets-container');
-        if (mode === 'list-view') {
-            container.removeClass('row').addClass('list-group');
-            // Convert cards to list items
+        
+        const { 
+            status, 
+            network, 
+            analysis_type, 
+            total_purchases, 
+            total_sells, 
+            unique_tokens, 
+            total_eth_spent, 
+            total_estimated_eth,
+            top_tokens, 
+            analysis_time_seconds,
+            from_cache,
+            orjson_enabled
+        } = results;
+        
+        // Display summary
+        this.log('', 'separator');
+        this.log('📊 ANALYSIS RESULTS', 'header');
+        this.log('', 'separator');
+        
+        this.log(`🌐 Network: ${network?.toUpperCase()}`, 'info');
+        this.log(`📈 Type: ${analysis_type?.toUpperCase()}`, 'info');
+        
+        if (analysis_type === 'buy') {
+            this.log(`💰 Total Purchases: ${total_purchases || 0}`, 'info');
+            this.log(`💎 ETH Spent: ${total_eth_spent?.toFixed(4) || '0.0000'} ETH`, 'info');
         } else {
-            container.removeClass('list-group').addClass('row');
-            // Convert back to grid
+            this.log(`📉 Total Sells: ${total_sells || 0}`, 'info');
+            this.log(`💰 ETH Value: ${total_estimated_eth?.toFixed(4) || '0.0000'} ETH`, 'info');
+        }
+        
+        this.log(`🪙 Unique Tokens: ${unique_tokens || 0}`, 'info');
+        this.log(`⏱️ Analysis Time: ${analysis_time_seconds?.toFixed(2) || '0'}s`, 'info');
+        
+        if (from_cache) {
+            this.log(`📋 Source: Cached (fast)`, 'cache');
+        } else {
+            this.log(`🔄 Source: Fresh analysis`, 'info');
+        }
+        
+        if (orjson_enabled) {
+            this.log(`⚡ JSON Optimization: orjson enabled`, 'info');
+        }
+        
+        // Display top tokens
+        if (top_tokens && top_tokens.length > 0) {
+            this.log('', 'separator');
+            this.log('🏆 TOP TOKENS', 'header');
+            this.log('', 'separator');
+            
+            top_tokens.slice(0, 10).forEach((token) => {
+                const score = analysis_type === 'buy' ? token.alpha_score : token.sell_score;
+                const ethValue = analysis_type === 'buy' ? token.total_eth_spent : token.total_estimated_eth;
+                
+                this.log(`${token.rank}. ${token.token}`, 'token');
+                this.log(`   Score: ${score?.toFixed(1) || '0.0'} | Wallets: ${token.wallet_count || 0} | ETH: ${ethValue?.toFixed(4) || '0.0000'}`, 'token-detail');
+                
+                if (token.platforms?.length > 0) {
+                    this.log(`   Platforms: ${token.platforms.join(', ')}`, 'token-detail');
+                }
+                
+                if (token.is_base_native) {
+                    this.log(`   🔷 Base Native Token`, 'token-detail');
+                }
+            });
+        } else {
+            this.log('⚠️ No tokens found in analysis', 'warning');
+        }
+        
+        this.log('', 'separator');
+        this.log('✅ Analysis display complete', 'success');
+    }
+    
+    stopAnalysis() {
+        if (this.eventSource) {
+            this.eventSource.close();
+            this.eventSource = null;
+        }
+        this.setRunning(false);
+        this.log('🛑 Analysis stopped by user', 'warning');
+    }
+    
+    setRunning(running) {
+        this.isRunning = running;
+        if (this.runButton) {
+            this.runButton.textContent = running ? 'Stop Analysis' : 'Run Analysis';
+            this.runButton.className = running ? 'btn btn-danger' : 'btn btn-primary';
+        }
+        
+        // Disable/enable form inputs
+        [this.networkSelect, this.walletsInput, this.daysInput, this.analysisTypeSelect].forEach(input => {
+            if (input) {
+                input.disabled = running;
+            }
+        });
+    }
+    
+    log(message, type = 'info') {
+        if (!this.console) return;
+        
+        const timestamp = new Date().toLocaleTimeString();
+        const div = document.createElement('div');
+        div.className = `console-line console-${type}`;
+        
+        // Style different message types
+        const styles = {
+            'info': 'color: #17a2b8;',
+            'success': 'color: #28a745; font-weight: bold;',
+            'error': 'color: #dc3545; font-weight: bold;',
+            'warning': 'color: #ffc107; font-weight: bold;',
+            'debug': 'color: #6c757d; font-size: 0.9em;',
+            'progress': 'color: #007bff;',
+            'header': 'color: #343a40; font-weight: bold; font-size: 1.1em;',
+            'separator': 'border-bottom: 1px solid #dee2e6; margin: 5px 0;',
+            'token': 'color: #495057; font-weight: bold; margin-left: 10px;',
+            'token-detail': 'color: #6c757d; margin-left: 20px; font-size: 0.9em;',
+            'cache': 'color: #6f42c1; font-weight: bold;'
+        };
+        
+        if (type === 'separator') {
+            div.style.cssText = styles[type];
+            div.innerHTML = '&nbsp;';
+        } else {
+            div.style.cssText = styles[type] || styles['info'];
+            div.innerHTML = `<span class="timestamp">[${timestamp}]</span> ${message}`;
+        }
+        
+        this.console.appendChild(div);
+        this.console.scrollTop = this.console.scrollHeight;
+        
+        // Keep console size manageable
+        const lines = this.console.children;
+        if (lines.length > 500) {
+            for (let i = 0; i < 100; i++) {
+                if (lines[0]) {
+                    this.console.removeChild(lines[0]);
+                }
+            }
         }
     }
-
-    refreshAll() {
-        this.loadWalletData();
-        this.showAlert('Refreshing all data...', 'info');
+    
+    clearConsole() {
+        if (this.console) {
+            this.console.innerHTML = '';
+            this.log('🧹 Console cleared', 'info');
+        }
     }
+}
 
-    startAutoRefresh() {
-        // Auto-refresh every 30 seconds
-        this.refreshInterval = setInterval(() => {
-            this.loadWalletData();
+// Enhanced API status checker for dashboard
+class APIStatusChecker {
+    constructor() {
+        this.statusInterval = null;
+        this.init();
+    }
+    
+    init() {
+        this.checkStatus();
+        this.startPeriodicCheck();
+    }
+    
+    async checkStatus() {
+        try {
+            const response = await fetch('/api/status');
+            const data = await response.json();
+            
+            this.updateStatusDisplay(data);
+        } catch (error) {
+            console.error('Status check failed:', error);
+            this.updateStatusDisplay(null, error);
+        }
+    }
+    
+    updateStatusDisplay(data, error = null) {
+        const statusElement = document.getElementById('apiStatus');
+        const cacheElement = document.getElementById('cacheStatus');
+        
+        if (error || !data) {
+            if (statusElement) {
+                statusElement.innerHTML = '<span class="badge badge-danger">API Offline</span>';
+            }
+            return;
+        }
+        
+        // Update API status
+        if (statusElement) {
+            const status = data.status === 'online' ? 'success' : 'warning';
+            statusElement.innerHTML = `
+                <span class="badge badge-${status}">API ${data.status}</span>
+                <small class="text-muted ml-2">v${data.version}</small>
+            `;
+        }
+        
+        // Update cache status
+        if (cacheElement && data.cache) {
+            const cacheInfo = data.cache;
+            const hitRate = cacheInfo.hit_rate || '0%';
+            const entries = cacheInfo.entries || 0;
+            const orjson = cacheInfo.orjson_enabled ? '⚡' : '';
+            
+            cacheElement.innerHTML = `
+                <span class="badge badge-info">Cache: ${entries} entries</span>
+                <small class="text-muted ml-2">${hitRate} hit rate ${orjson}</small>
+            `;
+        }
+    }
+    
+    startPeriodicCheck() {
+        // Check status every 30 seconds
+        this.statusInterval = setInterval(() => {
+            this.checkStatus();
         }, 30000);
     }
-
-    stopAutoRefresh() {
-        if (this.refreshInterval) {
-            clearInterval(this.refreshInterval);
-            this.refreshInterval = null;
+    
+    stopPeriodicCheck() {
+        if (this.statusInterval) {
+            clearInterval(this.statusInterval);
+            this.statusInterval = null;
         }
     }
+}
 
-    setLoading(loading) {
-        this.isLoading = loading;
-        const spinner = $('#loading-spinner');
-        
-        if (loading) {
-            spinner.show();
-        } else {
-            spinner.hide();
-        }
+// Initialize when DOM is ready
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('🚀 Initializing FastAPI Dashboard...');
+    
+    // Initialize analysis console
+    window.analysisConsole = new FastAPIAnalysisConsole();
+    
+    // Initialize status checker
+    window.statusChecker = new APIStatusChecker();
+    
+    // Add clear console button functionality
+    const clearButton = document.getElementById('clearConsole');
+    if (clearButton) {
+        clearButton.addEventListener('click', () => {
+            window.analysisConsole.clearConsole();
+        });
     }
+    
+    console.log('✅ FastAPI Dashboard initialized');
+});
 
-    showAlert(message, type = 'info') {
-        const alertClass = type === 'error' ? 'alert-danger' : 
-                          type === 'success' ? 'alert-success' : 
-                          type === 'warning' ? 'alert-warning' : 'alert-info';
-        
-        const iconClass = type === 'error' ? 'fas fa-exclamation-triangle' :
-                         type === 'success' ? 'fas fa-check-circle' :
-                         type === 'warning' ? 'fas fa-exclamation-circle' : 'fas fa-info-circle';
-
-        const alertHtml = `
-            <div class="alert ${alertClass} alert-dismissible fade show" role="alert">
-                <i class="${iconClass} me-2"></i>
-                ${message}
-                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-            </div>
-        `;
-
-        $('#dynamic-alerts').prepend(alertHtml);
-
-        // Auto-remove after 5 seconds
-        setTimeout(() => {
-            $('#dynamic-alerts .alert:last-child').fadeOut('slow', function() {
-                $(this).remove();
-            });
-        }, 5000);
-    }
-
-    isValidAddress(address) {
-        // Basic Ethereum address validation
-        return /^0x[a-fA-F0-9]{40}$/.test(address);
-    }
-}
-
-// Global dashboard instance
-let dashboard;
-
-// Initialize dashboard when document is ready
-function initializeDashboard() {
-    dashboard = new Dashboard();
-    dashboard.init();
-}
-
-// Global functions for onclick events
-function refreshData() {
-    dashboard.refreshAll();
-}
-
-function exportData() {
-    // Future feature
-    dashboard.showAlert('Export feature coming soon!', 'info');
-}
-
-function showSettings() {
-    // Future feature
-    dashboard.showAlert('Settings panel coming soon!', 'info');
-}
+// Export for debugging
+window.FastAPIAnalysisConsole = FastAPIAnalysisConsole;
+window.APIStatusChecker = APIStatusChecker;

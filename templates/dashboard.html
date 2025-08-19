@@ -55,6 +55,8 @@
     .console-line.warning { color: #ffa726; }
     .console-line.error { color: #ef5350; }
     .console-line.highlight { color: #ab47bc; font-weight: bold; }
+    .console-line.progress { color: #42a5f5; }
+    .console-line.debug { color: #90a4ae; font-size: 0.85rem; }
     
     .platform-tag {
         font-size: 0.75rem;
@@ -65,15 +67,39 @@
         font-size: 1.2rem;
         margin-right: 8px;
     }
+
+    /* FastAPI specific styles */
+    .fastapi-badge {
+        background: linear-gradient(45deg, #009688, #4caf50);
+        color: white;
+        font-size: 0.7rem;
+        padding: 2px 6px;
+        border-radius: 10px;
+        margin-left: 8px;
+    }
+
+    .cache-indicator {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        font-size: 0.8rem;
+    }
 </style>
 {% endblock %}
 
 {% block content %}
+<!-- FastAPI Status Indicator -->
+<div id="status-indicator" class="status-indicator">
+    <span class="badge bg-info">
+        <i class="fas fa-circle me-1"></i>FastAPI Ready
+    </span>
+</div>
+
 <!-- Control Buttons -->
 <div class="row mb-4">
     <div class="col-12">
         <div class="crypto-card p-3">
-            <div class="d-flex flex-wrap justify-content-center gap-2">
+            <div class="d-flex flex-wrap justify-content-center gap-2 align-items-center">
                 <button class="btn btn-primary active" onclick="loadData('ethereum', 'buy')">
                     <i class="fab fa-ethereum me-2"></i>ETH Buys
                 </button>
@@ -89,6 +115,18 @@
                 <button class="btn btn-warning" onclick="refreshAll()">
                     <i class="fas fa-sync me-2"></i>Refresh All
                 </button>
+                
+                <!-- FastAPI specific controls -->
+                <span class="fastapi-badge">
+                    ⚡ FastAPI v2.0
+                </span>
+                
+                <div class="form-check form-switch ms-3">
+                    <input class="form-check-input" type="checkbox" id="useCacheSwitch" checked>
+                    <label class="form-check-label text-light" for="useCacheSwitch">
+                        📋 Use Cache
+                    </label>
+                </div>
             </div>
         </div>
     </div>
@@ -97,25 +135,37 @@
 <!-- Stats Cards -->
 <div class="row mb-4" id="stats-container">
     <div class="col-lg-3 col-md-6 mb-3">
-        <div class="crypto-card p-3 text-center">
+        <div class="crypto-card p-3 text-center position-relative">
+            <div class="cache-indicator">
+                <span id="cache-indicator-1" class="badge bg-secondary" style="font-size: 0.6rem;"></span>
+            </div>
             <div class="display-4 text-warning mb-2" id="total-activity">-</div>
             <h6 class="text-muted text-uppercase">Total Activity</h6>
         </div>
     </div>
     <div class="col-lg-3 col-md-6 mb-3">
-        <div class="crypto-card p-3 text-center">
+        <div class="crypto-card p-3 text-center position-relative">
+            <div class="cache-indicator">
+                <span id="cache-indicator-2" class="badge bg-secondary" style="font-size: 0.6rem;"></span>
+            </div>
             <div class="display-4 text-info mb-2" id="unique-tokens">-</div>
             <h6 class="text-muted text-uppercase">Unique Tokens</h6>
         </div>
     </div>
     <div class="col-lg-3 col-md-6 mb-3">
-        <div class="crypto-card p-3 text-center">
+        <div class="crypto-card p-3 text-center position-relative">
+            <div class="cache-indicator">
+                <span id="cache-indicator-3" class="badge bg-secondary" style="font-size: 0.6rem;"></span>
+            </div>
             <div class="display-4 text-success mb-2" id="total-value">-</div>
             <h6 class="text-muted text-uppercase">Total Value (ETH)</h6>
         </div>
     </div>
     <div class="col-lg-3 col-md-6 mb-3">
-        <div class="crypto-card p-3 text-center">
+        <div class="crypto-card p-3 text-center position-relative">
+            <div class="cache-indicator">
+                <span id="cache-indicator-4" class="badge bg-secondary" style="font-size: 0.6rem;"></span>
+            </div>
             <div class="h5 text-primary mb-2" id="last-updated">-</div>
             <h6 class="text-muted text-uppercase">Last Updated</h6>
         </div>
@@ -128,8 +178,11 @@
         <div id="content-container">
             <div class="crypto-card p-4 text-center">
                 <i class="fas fa-rocket fa-3x text-primary mb-3"></i>
-                <h4>Ready to analyze...</h4>
+                <h4>FastAPI Ready to analyze...</h4>
                 <p class="text-muted">Select an analysis type above to get started</p>
+                <small class="text-muted">
+                    ⚡ Powered by FastAPI with intelligent caching and real-time streaming
+                </small>
             </div>
         </div>
     </div>
@@ -137,12 +190,13 @@
 
 <!-- Console Output Modal -->
 <div class="modal fade" id="consoleModal" tabindex="-1" aria-labelledby="consoleModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-lg">
+    <div class="modal-dialog modal-lg console-dialog">
         <div class="modal-content bg-dark border-secondary">
             <div class="modal-header bg-primary">
                 <h5 class="modal-title" id="consoleModalLabel">
                     <div class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></div>
-                    Analysis Console Output
+                    FastAPI Analysis Console
+                    <span class="fastapi-badge ms-2">SSE Streaming</span>
                 </h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
@@ -158,6 +212,9 @@
                          id="progress-fill" 
                          style="width: 0%">
                     </div>
+                </div>
+                <div class="me-3">
+                    <small class="text-muted" id="stream-status">Connecting...</small>
                 </div>
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
             </div>
@@ -175,18 +232,65 @@ let consoleModal;
 
 document.addEventListener('DOMContentLoaded', function() {
     consoleModal = new bootstrap.Modal(document.getElementById('consoleModal'));
+    
+    // Initialize FastAPI status check
+    checkFastAPIStatus();
+    setInterval(checkFastAPIStatus, 30000); // Check every 30 seconds
 });
+
+async function checkFastAPIStatus() {
+    try {
+        const response = await fetch('/api/status');
+        const data = await response.json();
+        
+        if (data.status === 'online') {
+            updateStatus('success', 'FastAPI Online');
+            
+            // Update cache indicators
+            const cacheInfo = data.cache || {};
+            updateCacheIndicators(cacheInfo);
+        } else {
+            updateStatus('warning', 'API Issues');
+        }
+    } catch (error) {
+        updateStatus('error', 'API Offline');
+        console.error('Status check failed:', error);
+    }
+}
+
+function updateCacheIndicators(cacheInfo) {
+    const indicators = ['cache-indicator-1', 'cache-indicator-2', 'cache-indicator-3', 'cache-indicator-4'];
+    const entries = cacheInfo.entries || 0;
+    const hitRate = cacheInfo.hit_rate || '0%';
+    const orjson = cacheInfo.orjson_enabled ? '⚡' : '';
+    
+    indicators.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            if (entries > 0) {
+                el.textContent = `${entries} ${orjson}`;
+                el.className = 'badge bg-success';
+                el.title = `Cache: ${hitRate} hit rate`;
+            } else {
+                el.textContent = 'Empty';
+                el.className = 'badge bg-secondary';
+                el.title = 'Cache is empty';
+            }
+        }
+    });
+}
 
 function showConsole() {
     document.getElementById('console-content').innerHTML = '';
     document.getElementById('progress-fill').style.width = '0%';
+    document.getElementById('stream-status').textContent = 'Connecting...';
     consoleModal.show();
 }
 
 function closeConsole() {
     consoleModal.hide();
     if (eventSource) {
-        console.log('Closing SSE connection');
+        console.log('🔌 Closing FastAPI SSE connection');
         eventSource.close();
         eventSource = null;
     }
@@ -206,12 +310,25 @@ function addConsoleOutput(message, type = 'info') {
 
 function updateProgress(percentage) {
     document.getElementById('progress-fill').style.width = percentage + '%';
+    
+    // Update stream status
+    const statusEl = document.getElementById('stream-status');
+    if (percentage === 100) {
+        statusEl.textContent = 'Complete';
+    } else if (percentage > 0) {
+        statusEl.textContent = `Processing... ${percentage}%`;
+    }
 }
 
 function updateStatus(status, message) {
     const indicator = document.getElementById('status-indicator');
-    indicator.className = `badge bg-${status === 'loading' ? 'warning' : status === 'error' ? 'danger' : 'success'}`;
-    indicator.innerHTML = `<i class="fas fa-circle me-1"></i>${message}`;
+    if (indicator) {
+        indicator.innerHTML = `
+            <span class="badge bg-${status === 'loading' ? 'warning' : status === 'error' ? 'danger' : 'success'}">
+                <i class="fas fa-circle me-1"></i>${message}
+            </span>
+        `;
+    }
 }
 
 function loadData(network, type) {
@@ -230,12 +347,14 @@ function loadData(network, type) {
         <div class="crypto-card p-4 text-center">
             <div class="spinner-border text-primary mb-3" role="status"></div>
             <h4>Analyzing ${network.toUpperCase()} ${type} data...</h4>
+            <p class="text-muted">Using FastAPI streaming analysis</p>
         </div>
     `;
     updateStatus('loading', 'Loading...');
     
-    // Add initial console output
-    addConsoleOutput(`<span class="me-2">🚀</span> Starting ${network.toUpperCase()} ${type} analysis...`, 'highlight');
+    // Add initial console output with FastAPI branding
+    addConsoleOutput(`🚀 Starting FastAPI ${network.toUpperCase()} ${type} analysis...`, 'highlight');
+    addConsoleOutput(`📡 Connecting to: /api/${network}/${type}/stream`, 'info');
     
     // Close any existing SSE connection
     if (eventSource) {
@@ -243,58 +362,96 @@ function loadData(network, type) {
         eventSource = null;
     }
     
-    // SSE connection logic (same as before)
+    // Build FastAPI streaming URL with cache parameter
+    const useCache = document.getElementById('useCacheSwitch').checked;
+    const streamUrl = `/api/${network}/${type}/stream?use_cache=${useCache}&wallets=173&days=1.0`;
+    
     if (typeof(EventSource) !== "undefined") {
-        const streamUrl = `/api/${network}/${type}/stream`;
-        console.log('Connecting to SSE:', streamUrl);
+        console.log('🔌 Connecting to FastAPI SSE:', streamUrl);
+        addConsoleOutput(`🔌 Connecting to FastAPI Server-Sent Events...`, 'info');
         
         eventSource = new EventSource(streamUrl);
         
         let hasReceivedData = false;
         let isComplete = false;
         
+        eventSource.onopen = function(event) {
+            addConsoleOutput('✅ FastAPI SSE connection established', 'success');
+            document.getElementById('stream-status').textContent = 'Connected';
+        };
+        
         eventSource.onmessage = function(event) {
             hasReceivedData = true;
             try {
                 const data = JSON.parse(event.data);
                 
-                if (data.type === 'console') {
-                    addConsoleOutput(data.message, data.level || 'info');
-                } else if (data.type === 'progress') {
-                    updateProgress(data.percentage);
+                // Handle FastAPI streaming format
+                if (data.type === 'progress') {
+                    if (data.message) {
+                        addConsoleOutput(data.message, 'info');
+                    }
+                    if (data.percentage !== undefined) {
+                        updateProgress(data.percentage);
+                    }
+                    if (data.processed && data.total) {
+                        addConsoleOutput(`📊 Progress: ${data.processed}/${data.total} wallets processed`, 'progress');
+                    }
                 } else if (data.type === 'results') {
-                    addConsoleOutput('📊 Processing results data...', 'success');
+                    addConsoleOutput('📋 Analysis results received, processing...', 'success');
+                    
+                    // Check if from cache
+                    if (data.data && data.data.from_cache) {
+                        addConsoleOutput('📋 Results served from FastAPI cache (instant)', 'highlight');
+                    } else {
+                        addConsoleOutput('🔄 Fresh analysis completed', 'success');
+                    }
+                    
                     displayResultData(data.data, currentNetwork, currentType);
-                } else if (data.type === 'complete' || data.type === 'final_complete') {
+                } else if (data.type === 'complete') {
                     if (!isComplete) {
                         isComplete = true;
                         eventSource.close();
                         eventSource = null;
-                        addConsoleOutput('✅ Analysis complete!', 'success');
+                        addConsoleOutput('✅ FastAPI analysis complete!', 'success');
+                        document.getElementById('stream-status').textContent = 'Complete';
                         
                         setTimeout(() => {
                             closeConsole();
-                            updateStatus('success', 'Online');
+                            updateStatus('success', 'FastAPI Online');
                         }, 1500);
                     }
+                } else if (data.type === 'error') {
+                    addConsoleOutput(`❌ Error: ${data.error || 'Unknown error'}`, 'error');
+                    updateStatus('error', 'Error');
+                    document.getElementById('stream-status').textContent = 'Error';
+                } else {
+                    // Handle any other message types
+                    addConsoleOutput(`📡 Received: ${JSON.stringify(data)}`, 'debug');
                 }
             } catch (error) {
-                console.error('Error parsing SSE data:', error);
-                addConsoleOutput(`❌ Error: ${error.message}`, 'error');
-                updateStatus('error', 'Error');
+                console.error('Error parsing FastAPI SSE data:', error);
+                addConsoleOutput(`❌ Parse Error: ${error.message}`, 'error');
+                updateStatus('error', 'Parse Error');
             }
         };
         
         eventSource.onerror = function(error) {
+            console.error('FastAPI SSE Error:', error);
+            
             if (eventSource) {
                 eventSource.close();
                 eventSource = null;
             }
             
             if (!hasReceivedData && !isComplete) {
-                addConsoleOutput('❌ Error: Unable to connect to SSE stream. Please try again later.', 'error');
+                addConsoleOutput('❌ FastAPI SSE connection failed. Please check server status.', 'error');
+                updateStatus('error', 'Connection Failed');
+                document.getElementById('stream-status').textContent = 'Failed';
             }
         };
+    } else {
+        addConsoleOutput('❌ EventSource not supported by this browser', 'error');
+        updateStatus('error', 'Browser Not Supported');
     }
 }
 
@@ -312,7 +469,7 @@ function displayResultData(data, network, type) {
     document.getElementById('last-updated').textContent = data.last_updated ? 
         new Date(data.last_updated).toLocaleTimeString() : new Date().toLocaleTimeString();
 
-    // Build content
+    // Build content with FastAPI indicators
     let html = '';
     
     if (!data.top_tokens || data.top_tokens.length === 0) {
@@ -321,6 +478,10 @@ function displayResultData(data, network, type) {
                 <i class="fas fa-info-circle fa-3x text-info mb-3"></i>
                 <h4>No Significant Activity Found</h4>
                 <p class="text-muted">${data.message || 'No tokens met the criteria for display'}</p>
+                <small class="text-muted">
+                    Analysis time: ${(data.analysis_time_seconds || 0).toFixed(2)}s
+                    ${data.from_cache ? ' (from cache)' : ' (fresh analysis)'}
+                </small>
             </div>
         `;
     } else {
@@ -328,11 +489,21 @@ function displayResultData(data, network, type) {
         const typeName = type === 'buy' ? 'Alpha Tokens' : 'Sell Pressure';
         const scoreLabel = type === 'buy' ? 'Alpha Score' : 'Sell Score';
         
+        // FastAPI performance info
+        const perfInfo = data.from_cache ? 
+            '<span class="badge bg-success ms-2">📋 Cached</span>' :
+            `<span class="badge bg-info ms-2">🔄 ${(data.analysis_time_seconds || 0).toFixed(1)}s</span>`;
+        
+        const orjsonInfo = data.orjson_enabled ? 
+            '<span class="badge bg-warning ms-1">⚡ orjson</span>' : '';
+        
         html = `
             <div class="crypto-card p-4">
                 <h3 class="mb-4">
                     <i class="fas fa-trophy text-warning me-2"></i>
                     Top ${networkName} ${typeName}
+                    ${perfInfo}
+                    ${orjsonInfo}
                 </h3>
                 <div class="row g-3">
         `;
@@ -356,7 +527,7 @@ function displayResultData(data, network, type) {
             
             html += `
                 <div class="col-12 mb-3">
-                    <div class="token-item p-3">
+                    <div class="token-item p-3 position-relative">
                         <div class="d-flex justify-content-between align-items-start mb-3">
                             <div>
                                 <h5 class="mb-1 text-warning" style="cursor: pointer;" onclick="window.open('${detailsUrl}', '_blank')">
@@ -454,7 +625,7 @@ function copyToClipboard(text) {
     });
 }
 
-// Keyboard shortcuts
+// Keyboard shortcuts (same as before)
 document.addEventListener('keydown', function(e) {
     if (e.ctrlKey || e.metaKey) {
         switch(e.key) {
