@@ -180,7 +180,7 @@ class FastAPIAnalysisConsole {
             this.log('', 'separator');
             
             top_tokens.slice(0, 10).forEach((token) => {
-                const score = analysis_type === 'buy' ? token.alpha_score : token.sell_score;
+                const score = analysis_type === 'buy' ? token.enhanced_alpha_score : token.sell_score;
                 const ethValue = analysis_type === 'buy' ? token.total_eth_spent : token.total_estimated_eth;
                 
                 this.log(`${token.rank}. ${token.token}`, 'token');

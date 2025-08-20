@@ -64,16 +64,12 @@ class DatabaseClient:
             # Use aggregation pipeline for better performance
             pipeline = []
             
-            if network:
-                pipeline.append({"$match": {"network": network}})
-            
             pipeline.extend([
                 {"$sort": {"score": -1}},
-                {"$limit": limit},
+                {"$limit": 42},
                 {"$project": {
                     "address": 1,
                     "score": 1,
-                    "network": 1,
                     "_id": 0  # Exclude _id to reduce data transfer
                 }}
             ])

@@ -105,9 +105,7 @@ class AnalysisService:
         # Minimum thresholds by network
         self.min_thresholds = {
             "ethereum": {"eth": 0.01, "usd": 20.0},
-            "base": {"eth": 0.005, "usd": 10.0},
-            "arbitrum": {"eth": 0.005, "usd": 10.0},
-            "polygon": {"eth": 0.002, "usd": 4.0},
+            "base": {"eth": 0.005, "usd": 10.0}
         }
     
     # TOKEN VALIDATION METHODS
