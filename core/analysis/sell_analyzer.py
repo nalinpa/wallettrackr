@@ -35,6 +35,8 @@ class SellAnalyzer:
             '0xa1319274692170c2eaa25c6e5ce3a56da79782f0',  # WETH (Base)
             '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',  # USDC on Base
             '0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca',  # USDbC on Base
+            '0xfc4720661ba3b2fa50cf3823024d16aded3aa773',  # USDT (Base/other)
+            '0x1619d964cf6904eac8979464d99d92bedd6e4435',  # USDC (Base/other)
         })
         
         # Performance tracking

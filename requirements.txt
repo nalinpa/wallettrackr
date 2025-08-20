@@ -1,16 +1,26 @@
-Flask==2.3.3
-Flask-CORS==4.0.0
-pymongo==4.5.0
-requests==2.31.0
-python-dotenv==1.0.0
-gunicorn==21.2.0
-schedule==1.2.0
-web3==6.15.1
-httpx[http2]==0.25.2
-orjson==3.9.10
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-aiofiles>=23.0.0
+# Core FastAPI dependencies
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
 pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# HTTP client and async file handling
+aiofiles>=23.0.0
+httpx[http2]==0.25.2
+
+# Database (MongoDB)
+motor>=3.3.0
+pymongo>=4.6.0
+
+# Templates and forms
+jinja2>=3.1.0
+python-multipart>=0.0.6
+
+# JSON serialization and performance
+orjson>=3.9.0
+uvloop>=0.19.0; sys_platform != "win32"
+
+# Data science and analysis
+pandas>=2.1.0
 numpy>=1.24.0
-pandas>=2.0.0
+scipy>=1.11.0

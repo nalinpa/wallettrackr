@@ -28,6 +28,7 @@ class AlchemyClient:
                 max_connections=30,
                 max_keepalive_connections=15
             ),
+            http2=True,
             headers={
                 'Content-Type': 'application/json',
                 'Accept': 'application/json',

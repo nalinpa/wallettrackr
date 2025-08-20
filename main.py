@@ -8,14 +8,33 @@ import uvicorn
 import logging
 from datetime import datetime
 import os
+import sys
 
 # Import your existing config
 from config.settings import settings, flask_config
 from services.cache.cache_service import startup_cache_service, shutdown_cache_service
 
+def setup_uvloop():
+    """Setup uvloop if available and not on Windows"""
+    if os.getenv('UVLOOP_ENABLED', '1') == '1' and sys.platform != 'win32':
+        try:
+            import uvloop
+            import asyncio
+            asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+            logger.info("✅ uvloop enabled for enhanced async performance")
+            return True
+        except ImportError:
+            logger.warning("⚠️ uvloop not available, using default asyncio")
+            return False
+    else:
+        logger.info("ℹ️ uvloop disabled (Windows or UVLOOP_ENABLED=0)")
+        return False
+    
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+uvloop_enabled = setup_uvloop()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -142,44 +161,6 @@ async def global_exception_handler(request, exc):
         }
     )
 
-# Development route to test cache functionality
-if settings.environment == 'development':
-    @app.get("/dev/cache-test")
-    async def test_cache():
-        """Development endpoint to test cache functionality"""
-        try:
-            from services.cache.cache_service import get_cache_service
-            cache_service = get_cache_service()
-            
-            # Test cache operations
-            test_data = {
-                "test": "data",
-                "timestamp": datetime.now().isoformat(),
-                "value": 12345
-            }
-            
-            # Set test data
-            await cache_service.set("test_key", test_data, 60, "test", "development")
-            
-            # Get test data
-            retrieved = await cache_service.get("test_key")
-            
-            # Get status
-            status = await cache_service.get_status()
-            
-            return {
-                "cache_test": "passed",
-                "set_data": test_data,
-                "retrieved_data": retrieved,
-                "data_matches": test_data == retrieved,
-                "cache_status": status
-            }
-            
-        except Exception as e:
-            return {
-                "cache_test": "failed",
-                "error": str(e)
-            }
 
 if __name__ == "__main__":
     uvicorn.run(

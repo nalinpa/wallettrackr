@@ -340,7 +340,7 @@ class APIStatusChecker {
         // Check status every 30 seconds
         this.statusInterval = setInterval(() => {
             this.checkStatus();
-        }, 30000);
+        }, 3000000);
     }
     
     stopPeriodicCheck() {

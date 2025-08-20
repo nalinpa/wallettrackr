@@ -3,31 +3,34 @@ version: '3.8'
 services:
   crypto-tracker:
     build: .
-    container_name: crypto-tracker    
+    container_name: crypto-tracker
     ports:
-      - "5005:8080"
+      - "5005:8001"  # Changed to match your FastAPI port
     environment:
-      - FLASK_ENV=production
+      - ENVIRONMENT=production
       - PYTHONUNBUFFERED=1
-      - PORT=8080
+      - PORT=8001
       - UVLOOP_ENABLED=1
-      # Add your environment variables
+      # Your environment variables
       - ALCHEMY_API_KEY=${ALCHEMY_API_KEY}
       - SECRET_KEY=${SECRET_KEY}
       - MONGO_URI=mongodb://mongodb:27017/crypto_tracker
-      - APP_PASSWORD=${APP_PASSWORD}
+      - REQUIRE_AUTH=${REQUIRE_AUTH:-false}
+      - AUTH_PASSWORD=${AUTH_PASSWORD}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
     volumes:
-      # Persist logs and config
+      # Persist cache, logs and config
+      - ./cache:/app/cache
       - ./logs:/app/logs
       - ./config:/app/config
       - ./alerts:/app/alerts
     restart: unless-stopped
+    depends_on:
+      - mongodb
     networks:
       - crypto-network
 
-  # Optional: Add MongoDB if not using external service
   mongodb:
     image: mongo:7
     container_name: crypto-mongodb
