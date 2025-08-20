@@ -300,7 +300,7 @@ class FastAPICacheService:
         return hashlib.md5(key.encode()).hexdigest()
     
     async def _save_to_disk(self, key: str, entry: Dict):
-        """Save entry to disk asynchronously"""
+        """Save entry to disk asynchronously with UTF-8 encoding"""
         try:
             file_path = self.cache_dir / f"{self._hash_key(key)}.json"
             
@@ -313,7 +313,7 @@ class FastAPICacheService:
                 "saved_at": datetime.now().isoformat()
             }
             
-            async with aiofiles.open(file_path, 'w') as f:
+            async with aiofiles.open(file_path, 'w', encoding='utf-8') as f:
                 await f.write(serialize(disk_data))
             
             self._metrics["disk_saves"] += 1
@@ -323,14 +323,14 @@ class FastAPICacheService:
             logger.error(f"❌ Disk save error for {key}: {e}")
     
     async def _load_from_disk(self, key: str) -> Optional[Dict]:
-        """Load entry from disk"""
+        """Load entry from disk with UTF-8 encoding"""
         try:
             file_path = self.cache_dir / f"{self._hash_key(key)}.json"
             
             if not file_path.exists():
                 return None
             
-            async with aiofiles.open(file_path, 'r') as f:
+            async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
                 content = await f.read()
             
             disk_data = deserialize(content)
@@ -353,7 +353,7 @@ class FastAPICacheService:
             return None
     
     async def load_from_disk(self) -> int:
-        """Load all valid cache entries from disk on startup"""
+        """Load all valid cache entries from disk on startup with UTF-8 encoding"""
         if not self.persist_to_disk or not self.cache_dir.exists():
             return 0
         
@@ -362,7 +362,7 @@ class FastAPICacheService:
         try:
             for file_path in self.cache_dir.glob("*.json"):
                 try:
-                    async with aiofiles.open(file_path, 'r') as f:
+                    async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
                         content = await f.read()
                     
                     disk_data = deserialize(content)

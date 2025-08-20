@@ -59,6 +59,25 @@ class SellAnalyzer:
         if self.services:
             await self.services.__aexit__(exc_type, exc_val, exc_tb)
     
+    def _convert_numpy_types(self, obj):
+        """Convert numpy types to native Python types for JSON serialization"""
+        import numpy as np
+        
+        if isinstance(obj, dict):
+            return {key: self._convert_numpy_types(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [self._convert_numpy_types(item) for item in obj]
+        elif isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.bool_):
+            return bool(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        else:
+            return obj
+    
     def is_excluded_token(self, asset: str, contract_address: str = None) -> bool:
         """Check if token should be excluded"""
         if asset.upper() in self.EXCLUDED_ASSETS:
@@ -152,12 +171,15 @@ class SellAnalyzer:
         df['amount_sold'] = pd.to_numeric(df['amount_sold'], errors='coerce').fillna(0)
         df['sophistication_score'] = pd.to_numeric(df['sophistication_score'], errors='coerce').fillna(0)
         
-        # Enhanced feature engineering
+        # Enhanced feature engineering with explicit type conversion
         df['usd_value'] = df['eth_received'] * 2500  # Rough ETH to USD
         df['log_eth_received'] = np.log1p(df['eth_received'])  # Log transform
-        df['wallet_quality_tier'] = pd.cut(df['sophistication_score'], 
-                                          bins=[0, 25, 50, 75, 100], 
-                                          labels=['Low', 'Medium', 'High', 'Elite'])
+        
+        # Handle categorical data properly
+        wallet_quality_bins = pd.cut(df['sophistication_score'], 
+                                bins=[0, 25, 50, 75, 100], 
+                                labels=['Low', 'Medium', 'High', 'Elite'])
+        df['wallet_quality_tier'] = wallet_quality_bins.astype(str)  # Convert to string
         
         # Time-based features
         if 'timestamp' in df.columns:
@@ -194,25 +216,26 @@ class SellAnalyzer:
         
         # 3. Sell momentum analysis
         momentum_analysis = self._analyze_sell_momentum(df)
-        analysis_results['momentum_analysis'] = momentum_analysis
+        analysis_results['momentum_analysis'] = self._convert_numpy_types(momentum_analysis)
         
         # 4. Wallet behavior analysis (who's selling?)
         wallet_analysis = self._analyze_selling_wallets(df)
-        analysis_results['wallet_analysis'] = wallet_analysis
+        analysis_results['wallet_analysis'] = self._convert_numpy_types(wallet_analysis)
         
         # 5. Market impact analysis
         market_impact = self._analyze_market_impact(df)
-        analysis_results['market_impact'] = market_impact
+        analysis_results['market_impact'] = self._convert_numpy_types(market_impact)
         
         # 6. Temporal selling patterns
         if 'time_since_first' in df.columns:
             temporal_patterns = self._analyze_temporal_patterns(df)
-            analysis_results['temporal_patterns'] = temporal_patterns
+            analysis_results['temporal_patterns'] = self._convert_numpy_types(temporal_patterns)
         
         self.stats["numpy_operations"] = 12  # Track number of numpy operations
         
-        return analysis_results
-    
+        # Final conversion to ensure all numpy types are handled
+        return self._convert_numpy_types(analysis_results)
+
     def _calculate_vectorized_sell_scores(self, df: pd.DataFrame, token_stats: pd.DataFrame) -> Dict:
         """Calculate sell pressure scores using vectorized numpy operations"""
         
@@ -253,7 +276,7 @@ class SellAnalyzer:
         # Calculate percentile ranks
         percentile_ranks = np.array([stats.percentileofscore(total_scores, score) for score in total_scores])
         
-        # Package results
+        # Package results with explicit type conversion
         sell_pressure_scores = {}
         for i, token in enumerate(tokens):
             sell_pressure_scores[token] = {
@@ -268,8 +291,9 @@ class SellAnalyzer:
                 'pressure_level': self._categorize_pressure(total_scores[i])
             }
         
-        return sell_pressure_scores
-    
+        # Convert all numpy types to native Python types
+        return self._convert_numpy_types(sell_pressure_scores)
+
     def _categorize_pressure(self, score: float) -> str:
         """Categorize sell pressure level"""
         if score > 150:
@@ -494,7 +518,7 @@ class SellAnalyzer:
         return all_sells
     
     async def _process_wallet_sells(self, wallet: Dict, transfers: Dict) -> List[Purchase]:
-        """Process sells for a single wallet"""
+        """Process sells for a single wallet - ENHANCED WITH CONTRACT ADDRESSES"""
         try:
             outgoing = transfers.get('outgoing', [])
             incoming = transfers.get('incoming', [])
@@ -544,7 +568,7 @@ class SellAnalyzer:
                     if eth_received < 0.001:
                         continue
                     
-                    # Create sell record
+                    # Create sell record with contract address
                     sell = Purchase(
                         transaction_hash=tx_hash,
                         token_bought=asset,  # Token that was sold
@@ -556,7 +580,7 @@ class SellAnalyzer:
                         timestamp=datetime.now(),
                         sophistication_score=wallet_score,
                         web3_analysis={
-                            "contract_address": contract_address,
+                            "contract_address": contract_address,  # FIXED: Include contract address
                             "amount_sold": amount_sold,
                             "is_sell": True
                         }
@@ -612,13 +636,20 @@ class SellAnalyzer:
         return sum(matched_values)
     
     def _create_enhanced_result(self, analysis_results: Dict, analysis_time: float, 
-                              sells: List[Purchase]) -> AnalysisResult:
-        """Create enhanced sell analysis result"""
+                          sells: List[Purchase]) -> AnalysisResult:
+        """Create enhanced sell analysis result - WITH CONTRACT ADDRESS MAPPING"""
         if not analysis_results:
             return self._empty_result()
         
         token_stats = analysis_results.get('token_stats')
         sell_pressure_scores = analysis_results.get('sell_pressure_scores', {})
+        
+        # FIXED: Create contract address lookup from sells data
+        contract_lookup = {}
+        for sell in sells:
+            token = sell.token_bought
+            if sell.web3_analysis and sell.web3_analysis.get('contract_address'):
+                contract_lookup[token] = sell.web3_analysis['contract_address']
         
         # Create ranked tokens with enhanced sell pressure scoring
         ranked_tokens = []
@@ -638,7 +669,7 @@ class SellAnalyzer:
                         'avg_wallet_score': float(stats_data['mean_wallet_score']),
                         'methods': [stats_data['primary_method']],
                         'platforms': [stats_data['primary_method']],  # Alias
-                        'contract_address': '',
+                        'contract_address': contract_lookup.get(token, ''),  # FIXED: Include contract address
                         
                         # Enhanced sell pressure metrics
                         'median_eth_received': float(stats_data['median_eth_received']),
@@ -675,14 +706,16 @@ class SellAnalyzer:
             'temporal_patterns': analysis_results.get('temporal_patterns', {}),
             'method_summary': {}, # For compatibility
             'enhanced_analytics_enabled': True,
-            'performance_improvement': '~3x faster with pandas/numpy'
+            'performance_improvement': '~3x faster with pandas/numpy',
+            'contract_addresses_captured': len(contract_lookup)  # Debug info
         }
         
         total_eth = sum(s.amount_received for s in sells)
         unique_tokens = len(set(s.token_bought for s in sells))
         
         logger.info(f"📊 Enhanced sell analysis: {len(sells)} sells, "
-                   f"{unique_tokens} tokens, {total_eth:.4f} ETH total")
+                f"{unique_tokens} tokens, {total_eth:.4f} ETH total, "
+                f"{len(contract_lookup)} contracts mapped")
         
         return AnalysisResult(
             network=self.network,

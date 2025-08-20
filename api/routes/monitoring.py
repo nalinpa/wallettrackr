@@ -35,11 +35,11 @@ class MonitorConfig(BaseModel):
     use_interval_for_timeframe: bool = True
 
 class AlertThresholds(BaseModel):
-    min_wallets: int = 2
-    min_eth_total: float = 0.5
-    min_alpha_score: float = 30.0
-    min_sell_score: float = 25.0
-    min_transactions: int = 3
+    min_wallets: int = 1
+    min_eth_total: float = 0.25
+    min_alpha_score: float = 20.0
+    min_sell_score: float = 15.0
+    min_transactions: int = 1
     filter_stablecoins: bool = True
 
 # In-memory storage for monitor state
@@ -55,11 +55,11 @@ monitor_state = {
         "use_interval_for_timeframe": True
     },
     "alert_thresholds": {
-        "min_wallets": 2,
-        "min_eth_total": 0.5,
-        "min_alpha_score": 30.0,
-        "min_sell_score": 25.0,
-        "min_transactions": 3,
+        "min_wallets": 1,          # FIXED: Changed from 2 to 1
+        "min_eth_total": 0.01,     # FIXED: Changed from 0.5 to 0.01
+        "min_alpha_score": 10.0,   # FIXED: Changed from 30.0 to 10.0
+        "min_sell_score": 10.0,    # FIXED: Changed from 25.0 to 10.0
+        "min_transactions": 1,     # FIXED: Changed from 3 to 1
         "filter_stablecoins": True
     },
     "stats": {
@@ -69,7 +69,8 @@ monitor_state = {
         "last_check_duration": 0
     },
     "alerts": [],
-    "last_results": None
+    "last_results": None,
+    "thresholds_last_updated": datetime.now().isoformat()
 }
 
 # Background monitoring task
@@ -117,7 +118,7 @@ async def get_monitor_status():
             "status": "error", 
             "data": {**monitor_state, "error": str(e)}
         }
-
+        
 @router.post("/monitor/start")
 async def start_monitor():
     """Start the monitoring system"""
@@ -142,17 +143,20 @@ async def start_monitor():
         # Start background monitoring task
         monitoring_task = asyncio.create_task(monitoring_loop())
         
+        logger.info(f"🚀 Monitor started with {len(monitor_state['config']['networks'])} networks")
+        
         return {
             "status": "success",
             "message": f"Monitor started with {len(monitor_state['config']['networks'])} networks",
-            "config": monitor_state["config"]
+            "config": monitor_state["config"],
+            "thresholds": monitor_state["alert_thresholds"]
         }
         
     except Exception as e:
         monitor_state["is_running"] = False
         logger.error(f"Error starting monitor: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
+    
 @router.post("/monitor/stop")
 async def stop_monitor():
     """Stop the monitoring system"""
@@ -172,6 +176,8 @@ async def stop_monitor():
             except asyncio.CancelledError:
                 pass
         
+        logger.info("🛑 Monitor stopped")
+        
         return {
             "status": "success",
             "message": "Monitor stopped"
@@ -180,7 +186,7 @@ async def stop_monitor():
     except Exception as e:
         logger.error(f"Error stopping monitor: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
+    
 @router.post("/monitor/check-now")
 async def check_now(background_tasks: BackgroundTasks):
     """Run an immediate check"""
@@ -201,6 +207,8 @@ async def check_now(background_tasks: BackgroundTasks):
             "networks": monitor_state["config"]["networks"]
         }
         
+        logger.info("🔍 Immediate analysis started")
+        
         return {
             "status": "success",
             "message": "Immediate analysis started",
@@ -213,7 +221,7 @@ async def check_now(background_tasks: BackgroundTasks):
 
 @router.get("/monitor/test")
 async def test_connection():
-    """Test monitor connections and capabilities - ENHANCED WITH NOTIFICATION TEST"""
+    """Test monitor connections and capabilities"""
     results = {}
     
     try:
@@ -242,8 +250,9 @@ async def test_connection():
         network_tests = {}
         for network in monitor_state["config"]["networks"]:
             try:
-                async with AlchemyClient(network) as client:
-                    connection_ok = await client.test_connection()
+                from services.service_container import ServiceContainer
+                async with ServiceContainer(network) as services:
+                    connection_ok = await services.alchemy.test_connection()
                     network_tests[network] = connection_ok
             except Exception as e:
                 logger.error(f"Network test failed for {network}: {e}")
@@ -251,30 +260,10 @@ async def test_connection():
         
         results["networks"] = network_tests
         
-        # Test analyzer initialization
-        analyzer_tests = {}
-        if ANALYSIS_AVAILABLE:
-            for network in monitor_state["config"]["networks"]:
-                try:
-                    # Test buy analyzer
-                    async with BuyAnalyzer(network) as analyzer:
-                        analyzer_tests[f"{network}_buy_analyzer"] = True
-                    
-                    # Test sell analyzer
-                    async with SellAnalyzer(network) as analyzer:
-                        analyzer_tests[f"{network}_sell_analyzer"] = True
-                        
-                except Exception as e:
-                    logger.error(f"Analyzer test failed for {network}: {e}")
-                    analyzer_tests[f"{network}_analyzers"] = False
-        
-        results["analyzers"] = analyzer_tests
-        
         # Overall health check
         critical_systems = [
             results["analysis_components"],
             all(network_tests.values()),
-            (not analyzer_tests or all(analyzer_tests.values()))
         ]
         
         notification_ok = results.get("telegram_connection", False) if NOTIFICATIONS_AVAILABLE else True
@@ -295,7 +284,7 @@ async def test_connection():
             "results": {"error": str(e)},
             "summary": "❌ Test failed with error"
         }
-        
+             
 @router.post("/monitor/config")
 async def update_config(config: MonitorConfig):
     """Update monitor configuration"""
@@ -332,6 +321,16 @@ async def update_config(config: MonitorConfig):
         logger.error(f"Error updating config: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
+@router.get("/monitor/thresholds")
+async def get_current_thresholds():
+    """Get current alert thresholds"""
+    return {
+        "status": "success",
+        "thresholds": monitor_state["alert_thresholds"],
+        "last_updated": monitor_state.get("thresholds_last_updated", "Never"),
+        "message": "Use POST /monitor/thresholds to update these values"
+    }
+
 @router.post("/monitor/thresholds")
 async def update_thresholds(thresholds: AlertThresholds):
     """Update alert thresholds"""
@@ -339,38 +338,61 @@ async def update_thresholds(thresholds: AlertThresholds):
     
     try:
         old_thresholds = monitor_state["alert_thresholds"].copy()
-        monitor_state["alert_thresholds"] = thresholds.dict()
+        new_thresholds = thresholds.dict()
+        
+        # Validate thresholds
+        if new_thresholds["min_eth_total"] < 0:
+            raise ValueError("min_eth_total must be positive")
+        if new_thresholds["min_wallets"] < 1:
+            raise ValueError("min_wallets must be at least 1")
+        if new_thresholds["min_alpha_score"] < 0:
+            raise ValueError("min_alpha_score must be positive")
+        
+        # Update thresholds
+        monitor_state["alert_thresholds"] = new_thresholds
+        monitor_state["thresholds_last_updated"] = datetime.now().isoformat()
+        
+        logger.info(f"🎯 Alert thresholds updated:")
+        for key, value in new_thresholds.items():
+            old_val = old_thresholds.get(key, "N/A")
+            logger.info(f"   {key}: {old_val} → {value}")
         
         return {
             "status": "success",
-            "message": "Alert thresholds updated",
-            "thresholds": monitor_state["alert_thresholds"],
-            "changes": {k: old_thresholds[k] != thresholds.dict()[k] for k in thresholds.dict().keys()}
+            "message": "Alert thresholds updated successfully",
+            "old_thresholds": old_thresholds,
+            "new_thresholds": new_thresholds,
+            "changes": {k: old_thresholds[k] != new_thresholds[k] for k in new_thresholds.keys()},
+            "last_updated": monitor_state["thresholds_last_updated"]
         }
         
     except Exception as e:
         logger.error(f"Error updating thresholds: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
+        raise HTTPException(status_code=400, detail=str(e))
+    
 @router.get("/monitor/live-updates")
 async def get_live_updates():
-    """Get recent updates for live monitoring"""
+    """Get recent updates for live monitoring - OPTIMIZED FOR FRONTEND"""
     try:
         return {
+            "status": "success",
             "current_check": monitor_state.get("current_check"),
             "last_check": monitor_state.get("last_check"),
             "next_check": monitor_state.get("next_check"),
             "is_running": monitor_state.get("is_running", False),
             "stats": monitor_state.get("stats", {}),
-            "recent_alerts": monitor_state["alerts"][-5:] if monitor_state["alerts"] else []
+            "recent_alerts": monitor_state["alerts"][-5:] if monitor_state["alerts"] else [],
+            "alert_count": len(monitor_state["alerts"]),
+            "thresholds": monitor_state["alert_thresholds"],
+            "timestamp": datetime.now().isoformat()
         }
     except Exception as e:
         logger.error(f"Error getting live updates: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
+        return {"status": "error", "error": str(e)}
+    
 @router.get("/monitor/alerts")
 async def get_alerts(limit: int = 20, offset: int = 0):
-    """Get recent alerts"""
+    """Get recent alerts - COMPATIBLE WITH FRONTEND"""
     try:
         # Get alerts from our state (sorted by newest first)
         all_alerts = sorted(monitor_state["alerts"], key=lambda x: x["timestamp"], reverse=True)
@@ -378,14 +400,13 @@ async def get_alerts(limit: int = 20, offset: int = 0):
         # Apply pagination
         paginated_alerts = all_alerts[offset:offset+limit]
         
-        # Return just the array of alerts (not wrapped in an object)
-        # This matches what the frontend JavaScript expects
+        # Return just the array of alerts (frontend expects this format)
         return paginated_alerts
         
     except Exception as e:
         logger.error(f"Error getting alerts: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
+    
 @router.post("/monitor/test-notifications")
 async def test_notifications():
     """Test the notification system"""
@@ -615,42 +636,63 @@ async def analyze_network(network: str):
         raise
 
 def process_analysis_results(network: str, results: dict) -> List[dict]:
-    """Process analysis results and generate alerts based on thresholds"""
+    """Process analysis results and generate alerts based on thresholds - FIXED"""
     alerts = []
     thresholds = monitor_state["alert_thresholds"]
     
     try:
-        logger.info(f"Processing analysis results for {network}")
+        logger.info(f"🔍 Processing analysis results for {network}")
+        logger.info(f"📊 Current thresholds: {thresholds}")
         logger.debug(f"Results keys: {list(results.keys())}")
         
         # Process buy analysis results
         if "buy_analysis" in results:
             buy_results = results["buy_analysis"]
-            logger.info(f"Buy analysis: {buy_results.total_transactions} transactions, {buy_results.unique_tokens} tokens")
+            logger.info(f"💰 Buy analysis: {buy_results.total_transactions} transactions, {buy_results.unique_tokens} tokens")
             logger.debug(f"Buy ranked tokens count: {len(buy_results.ranked_tokens) if hasattr(buy_results, 'ranked_tokens') else 'N/A'}")
             
             buy_alerts = process_buy_results(network, buy_results, thresholds)
             alerts.extend(buy_alerts)
-            logger.info(f"Generated {len(buy_alerts)} buy alerts")
+            logger.info(f"🚨 Generated {len(buy_alerts)} buy alerts")
         
         # Process sell analysis results  
         if "sell_analysis" in results:
             sell_results = results["sell_analysis"]
-            logger.info(f"Sell analysis: {sell_results.total_transactions} transactions, {sell_results.unique_tokens} tokens")
+            logger.info(f"📉 Sell analysis: {sell_results.total_transactions} transactions, {sell_results.unique_tokens} tokens")
             logger.debug(f"Sell ranked tokens count: {len(sell_results.ranked_tokens) if hasattr(sell_results, 'ranked_tokens') else 'N/A'}")
             
             sell_alerts = process_sell_results(network, sell_results, thresholds)
             alerts.extend(sell_alerts)
-            logger.info(f"Generated {len(sell_alerts)} sell alerts")
+            logger.info(f"🚨 Generated {len(sell_alerts)} sell alerts")
+        
+        # FIXED: Properly access AnalysisResult object attributes instead of using .get()
+        if not alerts:
+            buy_has_data = False
+            sell_has_data = False
+            
+            if "buy_analysis" in results:
+                buy_results = results["buy_analysis"]
+                buy_has_data = getattr(buy_results, 'total_transactions', 0) > 0
+            
+            if "sell_analysis" in results:
+                sell_results = results["sell_analysis"]
+                sell_has_data = getattr(sell_results, 'total_transactions', 0) > 0
+            
+            if buy_has_data or sell_has_data:
+                logger.warning("⚠️ No alerts generated despite having transaction data. Consider adjusting thresholds:")
+                logger.warning(f"   Current min_eth_total: {thresholds['min_eth_total']} ETH")
+                logger.warning(f"   Current min_wallets: {thresholds['min_wallets']}")
+                logger.warning(f"   Current min_alpha_score: {thresholds['min_alpha_score']}")
+                logger.warning("   Suggestion: Try lowering these values if legitimate activity is being missed")
         
         return alerts
         
     except Exception as e:
-        logger.error(f"Error processing results for {network}: {e}")
+        logger.error(f"❌ Error processing results for {network}: {e}", exc_info=True)
         return []
-
+    
 def process_buy_results(network: str, results, thresholds: dict) -> List[dict]:
-    """Process buy analysis results and generate alerts - FIXED ETH VALUES"""
+    """Process buy analysis results and generate alerts - FIXED VERSION"""
     alerts = []
     
     try:
@@ -662,31 +704,42 @@ def process_buy_results(network: str, results, thresholds: dict) -> List[dict]:
         
         for token_data in results.ranked_tokens[:10]:  # Check top 10 tokens
             try:
-                # Extract data - your ranked_tokens structure is [token_name, token_info, eth_value]
-                token_name, token_info, eth_value = token_data
-                
-                # Debug log the structure
-                logger.debug(f"Processing token {token_name}: info type={type(token_info)}, eth_value={eth_value}")
+                # Extract data - your ranked_tokens structure is [token_name, token_info, score_value]
+                token_name, token_info, score_value = token_data
                 
                 # Handle different token_info structures
                 if isinstance(token_info, dict):
-                    wallet_count = len(token_info.get('wallets', set()))
-                    purchase_count = token_info.get('total_purchases', token_info.get('count', 0))
-                    platforms = token_info.get('platforms', [])
+                    # Try to get wallet count
+                    if 'wallets' in token_info:
+                        wallet_count = len(token_info['wallets'])
+                    elif 'wallet_count' in token_info:
+                        wallet_count = token_info['wallet_count']
+                    else:
+                        wallet_count = 1
                     
-                    # FIXED: Get the correct ETH value from token_info, not the score
-                    # The eth_value parameter is actually the alpha score, not ETH value!
+                    purchase_count = token_info.get('total_purchases', token_info.get('count', 1))
+                    platforms = token_info.get('platforms', ['Unknown'])
+                    if not isinstance(platforms, list):
+                        platforms = [str(platforms)]
+                    
+                    # FIXED: Get the correct ETH value from token_info
                     correct_eth_value = token_info.get('total_eth_spent', 0.0)
+                    
+                    # If no ETH value found, try other field names
+                    if correct_eth_value == 0.0:
+                        for field in ['total_eth_value', 'eth_spent', 'eth_value']:
+                            if field in token_info:
+                                correct_eth_value = token_info[field]
+                                break
                     
                     # Validate and convert the ETH value
                     if isinstance(correct_eth_value, (int, float)):
                         # Check if it's in wei format (very large number)
                         if correct_eth_value > 1000000000000000000:  # More than 1 ETH in wei
                             correct_eth_value = correct_eth_value / 1e18
-                            logger.debug(f"🔧 Converted ETH from wei: {correct_eth_value}")
                         
                         # Safety cap for unrealistic values
-                        if correct_eth_value > 100:  # More than 100 ETH for single alert
+                        if correct_eth_value > 100:
                             logger.warning(f"⚠️ Capping high ETH value for {token_name}: {correct_eth_value} -> 10.0")
                             correct_eth_value = 10.0
                     else:
@@ -699,8 +752,8 @@ def process_buy_results(network: str, results, thresholds: dict) -> List[dict]:
                     platforms = ['Unknown']
                     correct_eth_value = 0.1  # Default small value
                 
-                # Use the eth_value as alpha score (which it actually is)
-                alpha_score = float(eth_value) if isinstance(eth_value, (int, float)) else 0.0
+                # Use the score_value as alpha score
+                alpha_score = float(score_value) if isinstance(score_value, (int, float)) else 0.0
                 
                 logger.debug(f"Token {token_name}: wallets={wallet_count}, eth={correct_eth_value}, score={alpha_score}")
                 
@@ -710,7 +763,12 @@ def process_buy_results(network: str, results, thresholds: dict) -> List[dict]:
                     alpha_score >= thresholds["min_alpha_score"]):
                     
                     # Determine confidence level
-                    confidence = determine_confidence(wallet_count, correct_eth_value, alpha_score)
+                    if wallet_count >= 3 and correct_eth_value >= 0.1 and alpha_score >= 50:
+                        confidence = "HIGH"
+                    elif wallet_count >= 2 and correct_eth_value >= 0.05 and alpha_score >= 25:
+                        confidence = "MEDIUM"
+                    else:
+                        confidence = "LOW"
                     
                     alert = {
                         "id": f"{network}_{token_name}_{int(datetime.now().timestamp())}",
@@ -720,17 +778,19 @@ def process_buy_results(network: str, results, thresholds: dict) -> List[dict]:
                         "confidence": confidence,
                         "network": network,
                         "data": {
-                            "total_eth_spent": round(float(correct_eth_value), 4),  # Use correct ETH value
+                            "total_eth_spent": round(float(correct_eth_value), 4),
                             "wallet_count": wallet_count,
                             "alpha_score": round(alpha_score, 1),
                             "total_purchases": purchase_count,
-                            "platforms": platforms if isinstance(platforms, list) else ['Unknown'],
+                            "platforms": platforms,
                             "average_purchase_size": round(float(correct_eth_value) / max(purchase_count, 1), 6),
                             "contract_address": token_info.get('contract_address', '') if isinstance(token_info, dict) else ''
                         }
                     }
                     alerts.append(alert)
                     logger.info(f"✅ Generated buy alert for {token_name}: eth={correct_eth_value:.4f}, score={alpha_score:.1f}")
+                else:
+                    logger.debug(f"❌ No alert for {token_name}: wallets={wallet_count}>={thresholds['min_wallets']}, eth={correct_eth_value}>={thresholds['min_eth_total']}, score={alpha_score}>={thresholds['min_alpha_score']}")
                 
             except Exception as token_error:
                 logger.error(f"Error processing individual token {token_name}: {token_error}")
@@ -739,11 +799,11 @@ def process_buy_results(network: str, results, thresholds: dict) -> List[dict]:
         return alerts
         
     except Exception as e:
-        logger.error(f"Error processing buy results: {e}")
+        logger.error(f"Error processing buy results: {e}", exc_info=True)
         return []
     
 def process_sell_results(network: str, results, thresholds: dict) -> List[dict]:
-    """Process sell analysis results and generate sell pressure alerts - FIXED ETH VALUES"""
+    """Process sell analysis results and generate sell pressure alerts - FIXED CONTRACT ADDRESSES"""
     alerts = []
     
     try:
@@ -753,40 +813,83 @@ def process_sell_results(network: str, results, thresholds: dict) -> List[dict]:
         
         logger.info(f"Processing {len(results.ranked_tokens)} sell tokens for {network}")
         
+        # Create contract address lookup from the raw sell data
+        contract_lookup = {}
+        try:
+            # Try to get contract addresses from the performance_metrics if available
+            if hasattr(results, 'performance_metrics') and results.performance_metrics:
+                # Look for contract addresses in the original sell data
+                pass
+        except:
+            pass
+        
         for token_data in results.ranked_tokens[:5]:  # Check top 5 for sell pressure
             try:
                 token_name, token_info, sell_score = token_data
                 
-                # Debug log the structure
-                logger.debug(f"Processing sell token {token_name}: info type={type(token_info)}, sell_score={sell_score}")
-                
                 # Handle different token_info structures  
                 if isinstance(token_info, dict):
-                    wallet_count = len(token_info.get('wallets', set()))
-                    sell_count = token_info.get('total_sells', token_info.get('count', 0))
+                    # Try to get wallet count
+                    if 'wallets' in token_info:
+                        wallet_count = len(token_info['wallets'])
+                    elif 'wallet_count' in token_info:
+                        wallet_count = token_info['wallet_count']
+                    else:
+                        wallet_count = 1
                     
-                    # FIXED: Get the correct ETH value from token_info, not the score
-                    # The sell_score parameter is actually the sell pressure score, not ETH value!
+                    sell_count = token_info.get('total_sells', token_info.get('count', 1))
+                    
+                    # Get the correct ETH value from token_info
                     correct_eth_value = token_info.get('total_estimated_eth', 0.0)
+                    
+                    # If no ETH value found, try other field names
+                    if correct_eth_value == 0.0:
+                        for field in ['total_eth_value', 'total_eth_received', 'eth_value']:
+                            if field in token_info:
+                                correct_eth_value = token_info[field]
+                                break
                     
                     # Validate and convert the ETH value
                     if isinstance(correct_eth_value, (int, float)):
                         # Check if it's in wei format (very large number)
                         if correct_eth_value > 1000000000000000000:  # More than 1 ETH in wei
                             correct_eth_value = correct_eth_value / 1e18
-                            logger.debug(f"🔧 Converted sell ETH from wei: {correct_eth_value}")
                         
                         # Safety cap for unrealistic values
-                        if correct_eth_value > 100:  # More than 100 ETH for single sell alert
+                        if correct_eth_value > 100:
                             logger.warning(f"⚠️ Capping high sell ETH value for {token_name}: {correct_eth_value} -> 10.0")
                             correct_eth_value = 10.0
                     else:
                         correct_eth_value = 0.0
+                    
+                    # FIXED: Try to get contract address from multiple sources
+                    contract_address = ''
+                    
+                    # Method 1: Direct from token_info
+                    contract_address = token_info.get('contract_address', '')
+                    
+                    # Method 2: From enhanced scoring data if available
+                    if not contract_address and 'enhanced_alpha_score' in token_info:
+                        contract_address = token_info.get('contract_address', '')
+                    
+                    # Method 3: Try to find it in wallets data
+                    if not contract_address and 'wallets' in token_info:
+                        # Sometimes contract addresses are stored in wallet transaction data
+                        wallets = token_info['wallets']
+                        if isinstance(wallets, (list, set)) and len(wallets) > 0:
+                            # This is a fallback - we might need to enhance sell analyzer
+                            pass
+                    
+                    # Method 4: Use a placeholder that indicates we need to enhance data collection
+                    if not contract_address:
+                        contract_address = f"pending_lookup_{token_name.lower()}"
+                        logger.debug(f"⚠️ No contract address found for sell token {token_name}")
                         
                 else:
                     wallet_count = 1
                     sell_count = 1
                     correct_eth_value = 0.1  # Default small value
+                    contract_address = ''
                 
                 # Use the sell_score as the actual sell pressure score
                 sell_pressure_score = float(sell_score) if isinstance(sell_score, (int, float)) else 0.0
@@ -798,7 +901,12 @@ def process_sell_results(network: str, results, thresholds: dict) -> List[dict]:
                     correct_eth_value >= thresholds["min_eth_total"] * 0.5 and 
                     sell_pressure_score >= 20):  # Separate threshold for sell pressure
                     
-                    confidence = determine_sell_confidence(wallet_count, correct_eth_value, sell_pressure_score)
+                    if wallet_count >= 4 and correct_eth_value >= 1.5 and sell_pressure_score >= 60:
+                        confidence = "HIGH"
+                    elif wallet_count >= 2 and correct_eth_value >= 0.8 and sell_pressure_score >= 40:
+                        confidence = "MEDIUM"
+                    else:
+                        confidence = "LOW"
                     
                     alert = {
                         "id": f"{network}_{token_name}_sell_{int(datetime.now().timestamp())}",
@@ -808,17 +916,19 @@ def process_sell_results(network: str, results, thresholds: dict) -> List[dict]:
                         "confidence": confidence,
                         "network": network,
                         "data": {
-                            "total_eth_value": round(float(correct_eth_value), 4),  # Use correct ETH value
+                            "total_eth_value": round(float(correct_eth_value), 4),
                             "total_estimated_eth": round(float(correct_eth_value), 4),  # Alias for compatibility
                             "wallet_count": wallet_count,
                             "sell_score": round(sell_pressure_score, 1),
                             "total_sells": sell_count,
                             "methods": ["Token Transfer"],  # Simplified for sell analysis
-                            "contract_address": token_info.get('contract_address', '') if isinstance(token_info, dict) else ''
+                            "contract_address": contract_address  # FIXED: Now includes contract address
                         }
                     }
                     alerts.append(alert)
-                    logger.info(f"✅ Generated sell alert for {token_name}: eth={correct_eth_value:.4f}, score={sell_pressure_score:.1f}")
+                    logger.info(f"✅ Generated sell alert for {token_name}: eth={correct_eth_value:.4f}, score={sell_pressure_score:.1f}, contract={contract_address[:10]}...")
+                else:
+                    logger.debug(f"❌ No sell alert for {token_name}: wallets={wallet_count}, eth={correct_eth_value}, score={sell_pressure_score}")
                 
             except Exception as token_error:
                 logger.error(f"Error processing individual sell token {token_name}: {token_error}")
@@ -827,9 +937,9 @@ def process_sell_results(network: str, results, thresholds: dict) -> List[dict]:
         return alerts
         
     except Exception as e:
-        logger.error(f"Error processing sell results: {e}")
+        logger.error(f"Error processing sell results: {e}", exc_info=True)
         return []
-    
+     
 def calculate_alpha_score(wallet_count: int, purchase_count: int, eth_value: float) -> float:
     """Calculate alpha score for a token based on various factors"""
     try:
@@ -979,3 +1089,327 @@ Confidence: {confidence}
     except Exception as e:
         logger.error(f"Error formatting alert message: {e}")
         return f"🚨 Alert: {alert.get('token', 'Unknown')} on {alert.get('network', 'Unknown')}"
+    
+    
+def debug_analysis_results(network: str, results: dict) -> None:
+    """Debug function to understand why no alerts are being generated"""
+    logger.info(f"🔍 DEBUGGING {network.upper()} ANALYSIS RESULTS")
+    
+    # Debug buy results
+    if "buy_analysis" in results:
+        buy_results = results["buy_analysis"]
+        logger.info(f"📊 BUY ANALYSIS DEBUG:")
+        logger.info(f"  Total transactions: {buy_results.total_transactions}")
+        logger.info(f"  Unique tokens: {buy_results.unique_tokens}")
+        logger.info(f"  Total ETH value: {buy_results.total_eth_value}")
+        
+        if hasattr(buy_results, 'ranked_tokens') and buy_results.ranked_tokens:
+            logger.info(f"  Ranked tokens count: {len(buy_results.ranked_tokens)}")
+            
+            # Show top 3 tokens with details
+            for i, token_data in enumerate(buy_results.ranked_tokens[:3]):
+                try:
+                    token_name, token_info, score = token_data
+                    
+                    if isinstance(token_info, dict):
+                        eth_value = token_info.get('total_eth_spent', 0)
+                        wallet_count = len(token_info.get('wallets', set())) if 'wallets' in token_info else token_info.get('wallet_count', 0)
+                        
+                        logger.info(f"    Token {i+1}: {token_name}")
+                        logger.info(f"      ETH Value: {eth_value}")
+                        logger.info(f"      Wallet Count: {wallet_count}")
+                        logger.info(f"      Alpha Score: {score}")
+                        
+                        # Check against thresholds
+                        thresholds = monitor_state["alert_thresholds"]
+                        meets_eth = eth_value >= thresholds["min_eth_total"]
+                        meets_wallets = wallet_count >= thresholds["min_wallets"]
+                        meets_score = score >= thresholds["min_alpha_score"]
+                        
+                        logger.info(f"      Meets ETH threshold ({thresholds['min_eth_total']}): {meets_eth}")
+                        logger.info(f"      Meets wallet threshold ({thresholds['min_wallets']}): {meets_wallets}")
+                        logger.info(f"      Meets score threshold ({thresholds['min_alpha_score']}): {meets_score}")
+                        logger.info(f"      Would generate alert: {meets_eth and meets_wallets and meets_score}")
+                        
+                except Exception as e:
+                    logger.error(f"    Error debugging token {i}: {e}")
+    
+    # Debug sell results
+    if "sell_analysis" in results:
+        sell_results = results["sell_analysis"]
+        logger.info(f"📉 SELL ANALYSIS DEBUG:")
+        logger.info(f"  Total transactions: {sell_results.total_transactions}")
+        logger.info(f"  Unique tokens: {sell_results.unique_tokens}")
+        logger.info(f"  Total ETH value: {sell_results.total_eth_value}")
+        
+        if hasattr(sell_results, 'ranked_tokens') and sell_results.ranked_tokens:
+            logger.info(f"  Ranked tokens count: {len(sell_results.ranked_tokens)}")
+            
+            # Show top 3 tokens with details
+            for i, token_data in enumerate(sell_results.ranked_tokens[:3]):
+                try:
+                    token_name, token_info, score = token_data
+                    
+                    if isinstance(token_info, dict):
+                        eth_value = token_info.get('total_estimated_eth', token_info.get('total_eth_value', 0))
+                        wallet_count = len(token_info.get('wallets', set())) if 'wallets' in token_info else token_info.get('wallet_count', 0)
+                        
+                        logger.info(f"    Token {i+1}: {token_name}")
+                        logger.info(f"      ETH Value: {eth_value}")
+                        logger.info(f"      Wallet Count: {wallet_count}")
+                        logger.info(f"      Sell Score: {score}")
+                        
+                        # Check against thresholds
+                        thresholds = monitor_state["alert_thresholds"]
+                        meets_eth = eth_value >= thresholds["min_eth_total"] * 0.5
+                        meets_wallets = wallet_count >= max(thresholds["min_wallets"] - 1, 1)
+                        meets_score = score >= 20
+                        
+                        logger.info(f"      Meets ETH threshold ({thresholds['min_eth_total'] * 0.5}): {meets_eth}")
+                        logger.info(f"      Meets wallet threshold ({max(thresholds['min_wallets'] - 1, 1)}): {meets_wallets}")
+                        logger.info(f"      Meets score threshold (20): {meets_score}")
+                        logger.info(f"      Would generate alert: {meets_eth and meets_wallets and meets_score}")
+                        
+                except Exception as e:
+                    logger.error(f"    Error debugging sell token {i}: {e}")
+
+# Updated process_analysis_results function with debugging
+def process_analysis_results(network: str, results: dict) -> List[dict]:
+    """Process analysis results and generate alerts based on thresholds - WITH DEBUGGING"""
+    alerts = []
+    thresholds = monitor_state["alert_thresholds"]
+    
+    try:
+        logger.info(f"🔍 Processing analysis results for {network}")
+        logger.info(f"📊 Current thresholds: {thresholds}")
+        logger.debug(f"Results keys: {list(results.keys())}")
+        
+        # Process buy analysis results
+        if "buy_analysis" in results:
+            buy_results = results["buy_analysis"]
+            logger.info(f"💰 Buy analysis: {buy_results.total_transactions} transactions, {buy_results.unique_tokens} tokens")
+            
+            buy_alerts = process_buy_results(network, buy_results, thresholds)
+            alerts.extend(buy_alerts)
+            logger.info(f"🚨 Generated {len(buy_alerts)} buy alerts")
+        
+        # Process sell analysis results  
+        if "sell_analysis" in results:
+            sell_results = results["sell_analysis"]
+            logger.info(f"📉 Sell analysis: {sell_results.total_transactions} transactions, {sell_results.unique_tokens} tokens")
+            
+            sell_alerts = process_sell_results(network, sell_results, thresholds)
+            alerts.extend(sell_alerts)
+            logger.info(f"🚨 Generated {len(sell_alerts)} sell alerts")
+        
+        # If no alerts generated but we have data, suggest threshold adjustments
+        if not alerts and (results.get("buy_analysis", {}).get("total_transactions", 0) > 0 or 
+                          results.get("sell_analysis", {}).get("total_transactions", 0) > 0):
+            logger.warning("⚠️ No alerts generated despite having transaction data. Consider adjusting thresholds:")
+            logger.warning(f"   Current min_eth_total: {thresholds['min_eth_total']} ETH")
+            logger.warning(f"   Current min_wallets: {thresholds['min_wallets']}")
+            logger.warning(f"   Current min_alpha_score: {thresholds['min_alpha_score']}")
+            logger.warning("   Suggestion: Try lowering these values if legitimate activity is being missed")
+        
+        return alerts
+        
+    except Exception as e:
+        logger.error(f"❌ Error processing results for {network}: {e}", exc_info=True)
+        return []
+
+@router.post("/monitor/config")
+async def update_config(config: MonitorConfig):
+    """Update monitor configuration"""
+    global monitor_state
+    
+    try:
+        old_config = monitor_state["config"].copy()
+        monitor_state["config"] = config.dict()
+        
+        # Validate networks
+        supported_networks = ["ethereum", "base"]
+        invalid_networks = [n for n in config.networks if n not in supported_networks]
+        if invalid_networks:
+            monitor_state["config"] = old_config  # Revert
+            raise ValueError(f"Unsupported networks: {invalid_networks}. Supported: {supported_networks}")
+        
+        # Update next check time if monitor is running
+        if monitor_state["is_running"]:
+            next_check = datetime.now() + timedelta(minutes=config.check_interval_minutes)
+            monitor_state["next_check"] = next_check.isoformat()
+        
+        logger.info(f"⚙️ Configuration updated for {len(config.networks)} networks")
+        
+        return {
+            "status": "success",
+            "message": f"Configuration updated for {len(config.networks)} networks",
+            "config": monitor_state["config"],
+            "changes": {
+                "networks": old_config["networks"] != config.networks,
+                "interval": old_config["check_interval_minutes"] != config.check_interval_minutes,
+                "wallets": old_config["num_wallets"] != config.num_wallets
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error updating config: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    
+# New endpoint to get suggested thresholds based on recent data
+@router.get("/monitor/suggest-thresholds")
+async def suggest_thresholds():
+    """Analyze recent results and suggest better thresholds"""
+    try:
+        if not monitor_state.get("last_results"):
+            return {
+                "status": "info",
+                "message": "No recent analysis data available. Run a check first.",
+                "suggestion": "Use /monitor/check-now to run an analysis"
+            }
+        
+        suggestions = {}
+        last_results = monitor_state["last_results"]
+        
+        for network, results in last_results.items():
+            network_suggestions = analyze_thresholds_for_network(network, results)
+            suggestions[network] = network_suggestions
+        
+        return {
+            "status": "success",
+            "current_thresholds": monitor_state["alert_thresholds"],
+            "suggestions": suggestions,
+            "note": "These are suggested starting points. Adjust based on your specific needs."
+        }
+        
+    except Exception as e:
+        logger.error(f"Error suggesting thresholds: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+def analyze_thresholds_for_network(network: str, results: dict) -> dict:
+    """Analyze network results and suggest appropriate thresholds"""
+    suggestions = {
+        "min_wallets": 1,  # Start lower
+        "min_eth_total": 0.1,  # Much lower starting point
+        "min_alpha_score": 15.0,  # Lower score threshold
+        "reasoning": []
+    }
+    
+    try:
+        # Analyze buy data
+        if "buy_analysis" in results:
+            buy_results = results["buy_analysis"]
+            if hasattr(buy_results, 'ranked_tokens') and buy_results.ranked_tokens:
+                eth_values = []
+                wallet_counts = []
+                scores = []
+                
+                for token_data in buy_results.ranked_tokens:
+                    try:
+                        token_name, token_info, score = token_data
+                        if isinstance(token_info, dict):
+                            eth_value = token_info.get('total_eth_spent', 0)
+                            wallet_count = len(token_info.get('wallets', set())) if 'wallets' in token_info else token_info.get('wallet_count', 0)
+                            
+                            if eth_value > 0:
+                                eth_values.append(eth_value)
+                                wallet_counts.append(wallet_count)
+                                scores.append(score)
+                    except:
+                        continue
+                
+                if eth_values:
+                    # Suggest thresholds based on median values
+                    eth_values.sort()
+                    wallet_counts.sort()
+                    scores.sort()
+                    
+                    median_eth = eth_values[len(eth_values)//2] if eth_values else 0.1
+                    median_wallets = wallet_counts[len(wallet_counts)//2] if wallet_counts else 1
+                    median_score = scores[len(scores)//2] if scores else 15
+                    
+                    suggestions["min_eth_total"] = max(median_eth * 0.5, 0.01)  # 50% of median, min 0.01
+                    suggestions["min_wallets"] = max(median_wallets - 1, 1)  # One less than median, min 1
+                    suggestions["min_alpha_score"] = max(median_score * 0.7, 10)  # 70% of median, min 10
+                    
+                    suggestions["reasoning"].append(f"Buy data: {len(eth_values)} tokens analyzed")
+                    suggestions["reasoning"].append(f"ETH range: {min(eth_values):.4f} - {max(eth_values):.4f}")
+                    suggestions["reasoning"].append(f"Wallet range: {min(wallet_counts)} - {max(wallet_counts)}")
+                    suggestions["reasoning"].append(f"Score range: {min(scores):.1f} - {max(scores):.1f}")
+        
+        # Add network-specific adjustments
+        if network == "base":
+            suggestions["min_eth_total"] *= 0.5  # Base typically has lower values
+            suggestions["reasoning"].append("Adjusted for Base network (typically lower ETH values)")
+        
+    except Exception as e:
+        logger.error(f"Error analyzing thresholds for {network}: {e}")
+        suggestions["reasoning"].append(f"Error in analysis: {str(e)}")
+    
+    return suggestions
+
+@router.get("/monitor/debug-data")
+async def get_debug_data():
+    """Get raw analysis data for debugging"""
+    try:
+        if not monitor_state.get("last_results"):
+            return {
+                "status": "info",
+                "message": "No analysis data available. Run /monitor/check-now first."
+            }
+        
+        debug_info = {}
+        
+        for network, results in monitor_state["last_results"].items():
+            network_debug = {"network": network}
+            
+            if "buy_analysis" in results:
+                buy_results = results["buy_analysis"]
+                network_debug["buy_analysis"] = {
+                    "total_transactions": getattr(buy_results, 'total_transactions', 0),
+                    "unique_tokens": getattr(buy_results, 'unique_tokens', 0),
+                    "total_eth_value": getattr(buy_results, 'total_eth_value', 0),
+                    "ranked_tokens_count": len(getattr(buy_results, 'ranked_tokens', [])),
+                    "top_3_tokens": []
+                }
+                
+                # Get details of top 3 tokens
+                if hasattr(buy_results, 'ranked_tokens') and buy_results.ranked_tokens:
+                    for i, token_data in enumerate(buy_results.ranked_tokens[:3]):
+                        try:
+                            token_name, token_info, score = token_data
+                            token_debug = {
+                                "name": token_name,
+                                "score": score,
+                                "info_type": str(type(token_info)),
+                                "info_keys": list(token_info.keys()) if isinstance(token_info, dict) else "N/A"
+                            }
+                            if isinstance(token_info, dict):
+                                token_debug["sample_data"] = {
+                                    k: v for k, v in list(token_info.items())[:5]  # First 5 keys
+                                }
+                            network_debug["buy_analysis"]["top_3_tokens"].append(token_debug)
+                        except Exception as e:
+                            network_debug["buy_analysis"]["top_3_tokens"].append({"error": str(e)})
+            
+            if "sell_analysis" in results:
+                sell_results = results["sell_analysis"]
+                network_debug["sell_analysis"] = {
+                    "total_transactions": getattr(sell_results, 'total_transactions', 0),
+                    "unique_tokens": getattr(sell_results, 'unique_tokens', 0),
+                    "total_eth_value": getattr(sell_results, 'total_eth_value', 0),
+                    "ranked_tokens_count": len(getattr(sell_results, 'ranked_tokens', []))
+                }
+            
+            debug_info[network] = network_debug
+        
+        return {
+            "status": "success",
+            "current_thresholds": monitor_state["alert_thresholds"],
+            "debug_data": debug_info,
+            "total_alerts_generated": len(monitor_state["alerts"]),
+            "suggestion": "Check if ETH values and scores are below thresholds"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting debug data: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

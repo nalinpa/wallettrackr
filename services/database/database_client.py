@@ -66,7 +66,7 @@ class DatabaseClient:
             
             pipeline.extend([
                 {"$sort": {"score": -1}},
-                {"$limit": 42},
+                {"$limit": limit},
                 {"$project": {
                     "address": 1,
                     "score": 1,

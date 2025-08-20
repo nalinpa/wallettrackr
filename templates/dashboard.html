@@ -511,13 +511,15 @@ function displayResultData(data, network, type) {
         data.top_tokens.forEach(token => {
             const nativeFlag = token.is_base_native ? '<span class="native-flag">🔵</span>' : '';
             const valueKey = type === 'buy' ? 'total_eth_spent' : 'total_estimated_eth';
-            const scoreKey = type === 'buy' ? 'enhanced_alpha_score' : 'sell_score';
+            const scoreKey = type === 'buy' ? 'enhanced_alpha_score' : 'sell_pressure_score';
             
             const platforms = token.platforms || token.methods || [];
             const platformTags = platforms.slice(0, 3).map(p => 
                 `<span class="badge bg-secondary platform-tag">${p}</span>`
             ).join('');
             
+            console.log(`Token: ${JSON.stringify(token)}`);
+
             const ethValue = token[valueKey] || 0;
             const score = token[scoreKey] || 0;
 
