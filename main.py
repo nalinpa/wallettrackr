@@ -129,6 +129,8 @@ from api.routes.cache import router as cache_router
 from api.routes.frontend import router as frontend_router
 from api.routes.monitoring import router as monitoring_router
 from api.routes.token import router as token_router 
+from api.routes.wallets import router as wallet_router 
+
 
 # Include routers
 app.include_router(analysis_router, prefix="/api")
@@ -137,6 +139,7 @@ app.include_router(cache_router, prefix="/api")  # Now uses FastAPI-native cache
 app.include_router(frontend_router)
 app.include_router(monitoring_router, prefix="/api") 
 app.include_router(token_router, prefix="/api") 
+app.include_router(wallet_router, prefix="/api")
 
 # Cache-aware global exception handler
 @app.exception_handler(Exception)

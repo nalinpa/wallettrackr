@@ -1173,9 +1173,8 @@ def debug_analysis_results(network: str, results: dict) -> None:
                 except Exception as e:
                     logger.error(f"    Error debugging sell token {i}: {e}")
 
-# Updated process_analysis_results function with debugging
 def process_analysis_results(network: str, results: dict) -> List[dict]:
-    """Process analysis results and generate alerts based on thresholds - WITH DEBUGGING"""
+    """Process analysis results and generate alerts based on thresholds - FIXED VERSION"""
     alerts = []
     thresholds = monitor_state["alert_thresholds"]
     
@@ -1202,21 +1201,32 @@ def process_analysis_results(network: str, results: dict) -> List[dict]:
             alerts.extend(sell_alerts)
             logger.info(f"🚨 Generated {len(sell_alerts)} sell alerts")
         
-        # If no alerts generated but we have data, suggest threshold adjustments
-        if not alerts and (results.get("buy_analysis", {}).get("total_transactions", 0) > 0 or 
-                          results.get("sell_analysis", {}).get("total_transactions", 0) > 0):
-            logger.warning("⚠️ No alerts generated despite having transaction data. Consider adjusting thresholds:")
-            logger.warning(f"   Current min_eth_total: {thresholds['min_eth_total']} ETH")
-            logger.warning(f"   Current min_wallets: {thresholds['min_wallets']}")
-            logger.warning(f"   Current min_alpha_score: {thresholds['min_alpha_score']}")
-            logger.warning("   Suggestion: Try lowering these values if legitimate activity is being missed")
+        # FIXED: Check transaction data using proper AnalysisResult attributes
+        if not alerts:
+            buy_has_data = False
+            sell_has_data = False
+            
+            if "buy_analysis" in results:
+                buy_results = results["buy_analysis"]
+                buy_has_data = getattr(buy_results, 'total_transactions', 0) > 0
+            
+            if "sell_analysis" in results:
+                sell_results = results["sell_analysis"]
+                sell_has_data = getattr(sell_results, 'total_transactions', 0) > 0
+            
+            if buy_has_data or sell_has_data:
+                logger.warning("⚠️ No alerts generated despite having transaction data. Consider adjusting thresholds:")
+                logger.warning(f"   Current min_eth_total: {thresholds['min_eth_total']} ETH")
+                logger.warning(f"   Current min_wallets: {thresholds['min_wallets']}")
+                logger.warning(f"   Current min_alpha_score: {thresholds['min_alpha_score']}")
+                logger.warning("   Suggestion: Try lowering these values if legitimate activity is being missed")
         
         return alerts
         
     except Exception as e:
         logger.error(f"❌ Error processing results for {network}: {e}", exc_info=True)
         return []
-
+    
 @router.post("/monitor/config")
 async def update_config(config: MonitorConfig):
     """Update monitor configuration"""

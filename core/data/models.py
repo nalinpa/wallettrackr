@@ -24,6 +24,29 @@ class WalletData:
     network: str
     web3_analysis: Optional[Dict] = None
 
+@dataclass
+class WalletSubmission:
+    """Wallet submission data"""
+    address: str
+    rating: int
+    tag: Optional[str] = None
+    network: str = "ethereum"
+    created_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+    status: str = "pending"  # pending, approved, rejected
+    
+    def __post_init__(self):
+        if self.created_at is None:
+            self.created_at = datetime.now()
+
+@dataclass
+class WalletValidationResult:
+    """Wallet validation result"""
+    is_valid: bool
+    errors: list
+    warnings: list
+    normalized_address: str = ""
+    
 @dataclass  
 class AnalysisResult:
     """Analysis result container"""

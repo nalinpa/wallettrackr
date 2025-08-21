@@ -1,8 +1,8 @@
-<nav class="navbar navbar-expand-lg navbar-dark">
+<nav class="navbar navbar-expand-lg navbar-dark" style="background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);">
     <div class="container-fluid">
-        <a class="navbar-brand" href="/">
+        <a class="navbar-brand fw-bold" href="/">
             <i class="fas fa-chart-line me-2"></i>
-            Crypto Alpha Analysis
+            Crypto Alpha
         </a>
         
         <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
@@ -12,49 +12,53 @@
         <div class="collapse navbar-collapse" id="navbarNav">
             <ul class="navbar-nav me-auto">
                 <li class="nav-item">
-                    <a class="nav-link {{ 'active' if request.url.path == '/' }}" href="/">
-                        <i class="fas fa-home me-1"></i>Dashboard
+                    <a class="nav-link {{ 'active' if request.endpoint == 'dashboard' else '' }}" href="/">
+                        <i class="fas fa-home me-1"></i>
+                        Dashboard
                     </a>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link {{ 'active' if request.url.path == '/monitor' }}" href="/monitor">
-                        <i class="fas fa-eye me-1"></i>Monitor
+                    <a class="nav-link {{ 'active' if request.endpoint == 'monitor' else '' }}" href="/monitor">
+                        <i class="fas fa-radar me-1"></i>
+                        Monitor
                     </a>
                 </li>
-                <li class="nav-item">
-                    <a class="nav-link" href="/docs" target="_blank">
-                        <i class="fas fa-cog me-1"></i>API Docs
+                <li class="nav-item dropdown">
+                    <a class="nav-link dropdown-toggle" href="#" id="walletDropdown" role="button" data-bs-toggle="dropdown">
+                        <i class="fas fa-wallet me-1"></i>
+                        Wallets
                     </a>
+                    <ul class="dropdown-menu">
+                        <li><a class="dropdown-item" href="/wallet/add">
+                            <i class="fas fa-plus me-2"></i>Add Wallet
+                        </a></li>
+                        <li><a class="dropdown-item" href="/wallet/manage">
+                            <i class="fas fa-cogs me-2"></i>Manage Wallets
+                        </a></li>
+                    </ul>
                 </li>
             </ul>
             
             <ul class="navbar-nav">
                 <li class="nav-item">
-                    <span id="connection-status" class="badge bg-success me-3">
-                        <i class="fas fa-circle me-1"></i>Online
+                    <span class="navbar-text">
+                        <span id="connection-status" class="badge bg-success">
+                            <i class="fas fa-circle me-1"></i>Online
+                        </span>
                     </span>
                 </li>
-                <li class="nav-item dropdown">
-                    <a class="nav-link dropdown-toggle" href="#" id="navbarDropdown" role="button" data-bs-toggle="dropdown">
-                        <i class="fas fa-tools me-1"></i>Tools
+                {% if require_auth and not authenticated %}
+                <li class="nav-item">
+                    <a class="nav-link" href="/login">
+                        <i class="fas fa-sign-in-alt me-1"></i>
+                        Login
                     </a>
-                    <ul class="dropdown-menu dropdown-menu-dark">
-                        <li><a class="dropdown-item" href="#" onclick="refreshData()">
-                            <i class="fas fa-sync me-2"></i>Refresh Data
-                        </a></li>
-                        <li><a class="dropdown-item" href="#" onclick="exportData()">
-                            <i class="fas fa-download me-2"></i>Export Data
-                        </a></li>
-                        <li><hr class="dropdown-divider"></li>
-                        <li><a class="dropdown-item" href="#" onclick="showSettings()">
-                            <i class="fas fa-cog me-2"></i>Settings
-                        </a></li>
-                    </ul>
                 </li>
-                {% if require_auth %}
+                {% elif require_auth and authenticated %}
                 <li class="nav-item">
                     <a class="nav-link" href="/logout">
-                        <i class="fas fa-sign-out-alt me-1"></i>Logout
+                        <i class="fas fa-sign-out-alt me-1"></i>
+                        Logout
                     </a>
                 </li>
                 {% endif %}

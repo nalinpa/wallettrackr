@@ -94,6 +94,31 @@ async def monitor_page(request: Request, auth: bool = Depends(require_auth)):
     context = get_template_context(request)
     return templates.TemplateResponse("monitor.html", context)
 
+@router.get("/wallet/add", response_class=HTMLResponse)
+async def add_wallet_page(
+    request: Request
+):
+    """Add wallet form page"""
+    context = get_template_context(request)
+    context.update({
+        "title": "Add Smart Wallet",
+        "page": "add_wallet"
+    })
+    return templates.TemplateResponse("add_wallet.html", context)
+
+@router.get("/wallet/manage", response_class=HTMLResponse)
+async def manage_wallets_page(
+    request: Request,
+):
+    """Wallet management page"""
+    context = get_template_context(request)
+    context.update({
+        "title": "Manage Wallets",
+        "page": "manage_wallets"
+    })
+    return templates.TemplateResponse("manage_wallets.html", context)
+
+
 @router.get("/token", response_class=HTMLResponse)
 async def token_page_frontend(
     request: Request,

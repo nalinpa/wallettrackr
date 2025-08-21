@@ -1,0 +1,346 @@
+<!-- templates/manage_wallets.html -->
+{% extends "base.html" %}
+
+{% block title %}Manage Wallets - Crypto Alpha Analysis{% endblock %}
+
+{% block head %}
+<style>
+    .search-card {
+        background: linear-gradient(145deg, #2c3e50, #34495e);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 15px;
+        box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+    }
+    
+    .wallet-item {
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 10px;
+        transition: all 0.2s ease;
+    }
+    
+    .wallet-item:hover {
+        background: rgba(255, 255, 255, 0.08);
+        transform: translateY(-1px);
+    }
+    
+    .rating-high { color: #dc3545; }
+    .rating-medium { color: #28a745; }
+    .rating-low { color: #ffc107; }
+    .rating-basic { color: #6c757d; }
+    
+    .address-mono {
+        font-family: 'Courier New', monospace;
+        font-size: 0.9rem;
+    }
+    
+    .empty-state {
+        opacity: 0.6;
+        text-align: center;
+        padding: 3rem 1rem;
+    }
+    
+    .empty-state i {
+        font-size: 3rem;
+        margin-bottom: 1rem;
+        opacity: 0.5;
+    }
+    
+    .btn-copy {
+        background: rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        color: #fff;
+        font-size: 0.75rem;
+    }
+    
+    .btn-copy:hover {
+        background: rgba(255, 255, 255, 0.2);
+        color: #fff;
+    }
+    
+    .btn-view {
+        background: rgba(102, 126, 234, 0.2);
+        border: 1px solid rgba(102, 126, 234, 0.4);
+        color: var(--primary-color);
+        font-size: 0.75rem;
+    }
+    
+    .btn-view:hover {
+        background: rgba(102, 126, 234, 0.3);
+        color: var(--primary-color);
+    }
+
+    .search-input:focus {
+        border-color: var(--primary-color);
+        box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+    }
+
+    .loading-spinner {
+        display: inline-block;
+        width: 1rem;
+        height: 1rem;
+        border: 2px solid rgba(255, 255, 255, 0.3);
+        border-radius: 50%;
+        border-top-color: var(--primary-color);
+        animation: spin 1s linear infinite;
+    }
+
+    .stats-header {
+        background: linear-gradient(145deg, #667eea, #764ba2);
+        border-radius: 15px;
+        color: white;
+        margin-bottom: 2rem;
+    }
+    
+    .stat-item {
+        text-align: center;
+        padding: 1rem;
+    }
+    
+    .stat-value {
+        font-size: 2rem;
+        font-weight: bold;
+        display: block;
+    }
+    
+    .stat-label {
+        font-size: 0.9rem;
+        opacity: 0.9;
+        margin-top: 0.25rem;
+    }
+    
+    .rating-breakdown {
+        display: flex;
+        gap: 0.5rem;
+        margin-top: 0.5rem;
+        flex-wrap: wrap;
+    }
+    
+    .rating-badge {
+        padding: 0.25rem 0.5rem;
+        border-radius: 12px;
+        font-size: 0.75rem;
+        font-weight: 500;
+    }
+    
+    .rating-basic { background: rgba(108, 117, 125, 0.3); }
+    .rating-low { background: rgba(255, 193, 7, 0.3); }
+    .rating-medium { background: rgba(40, 167, 69, 0.3); }
+    .rating-high { background: rgba(220, 53, 69, 0.3); }
+    
+    .loading-stat {
+        opacity: 0.6;
+    }
+    
+    @media (max-width: 768px) {
+        .stat-value {
+            font-size: 1.5rem;
+        }
+        
+        .rating-breakdown {
+            justify-content: center;
+        }
+    }
+
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <!-- Header -->
+        <div class="text-center mb-4">
+            <h1 class="display-6 fw-bold mb-2">
+                <i class="fas fa-cogs text-primary me-2"></i>
+                Manage Wallets
+            </h1>
+            <p class="text-muted">Search, view, and manage smart money wallets</p>
+        </div>
+
+        <!-- Stats Header -->
+        <div class="stats-header p-4 mb-4">
+            <div class="row" id="statsContainer">
+                <!-- Loading state -->
+                <div class="col-md-3 col-6">
+                    <div class="stat-item loading-stat">
+                        <span class="stat-value">
+                            <i class="fas fa-spinner fa-spin"></i>
+                        </span>
+                        <div class="stat-label">Total Wallets</div>
+                    </div>
+                </div>
+                <div class="col-md-3 col-6">
+                    <div class="stat-item loading-stat">
+                        <span class="stat-value">
+                            <i class="fas fa-spinner fa-spin"></i>
+                        </span>
+                        <div class="stat-label">Average Rating</div>
+                    </div>
+                </div>
+                <div class="col-md-3 col-6">
+                    <div class="stat-item loading-stat">
+                        <span class="stat-value">
+                            <i class="fas fa-spinner fa-spin"></i>
+                        </span>
+                        <div class="stat-label">Web Added</div>
+                    </div>
+                </div>
+                <div class="col-md-3 col-6">
+                    <div class="stat-item loading-stat">
+                        <span class="stat-value">
+                            <i class="fas fa-spinner fa-spin"></i>
+                        </span>
+                        <div class="stat-label">Today</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Network & Rating Breakdown -->
+            <div class="row mt-3" id="breakdownContainer" style="display: none;">
+                <div class="col-md-6">
+                    <div class="text-center">
+                        <small class="d-block mb-2">Networks</small>
+                        <div id="networkBreakdown" class="rating-breakdown justify-content-center"></div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="text-center">
+                        <small class="d-block mb-2">Rating Distribution</small>
+                        <div id="ratingBreakdown" class="rating-breakdown justify-content-center"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Search Bar -->
+        <div class="search-card p-4 mb-4">
+            <div class="row align-items-center">
+                <div class="col-md-10">
+                    <div class="input-group input-group-lg">
+                        <span class="input-group-text bg-dark border-secondary">
+                            <i class="fas fa-search text-muted"></i>
+                        </span>
+                        <input 
+                            type="text" 
+                            class="form-control search-input bg-dark border-secondary text-light" 
+                            id="searchInput"
+                            placeholder="Search by address or tag..."
+                        >
+                    </div>
+                </div>
+                <div class="col-md-2 mt-3 mt-md-0">
+                    <button onclick="searchWallets()" class="btn btn-primary btn-lg w-100">
+                        <i class="fas fa-search me-2"></i>
+                        Search
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results Grid -->
+        <div class="row">
+            <!-- Search Results -->
+            <div class="col-lg-6">
+                <div class="crypto-card p-4 h-100">
+                    <h5 class="mb-3">
+                        <i class="fas fa-search me-2"></i>
+                        Search Results
+                    </h5>
+                    <div id="searchResults" style="max-height: 600px; overflow-y: auto;">
+                        <div class="empty-state">
+                            <i class="fas fa-search"></i>
+                            <p class="mb-0">Enter a search term to find wallets</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Submissions -->
+            <div class="col-lg-6 mt-4 mt-lg-0">
+                <div class="crypto-card p-4 h-100">
+                    <h5 class="mb-3">
+                        <i class="fas fa-clock me-2"></i>
+                        Recent Web Submissions
+                    </h5>
+                    <div id="recentSubmissions" style="max-height: 600px; overflow-y: auto;">
+                        <div class="empty-state">
+                            <div class="loading-spinner"></div>
+                            <p class="mt-2 mb-0">Loading recent submissions...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+console.log('📄 Manage wallets page loaded');
+
+// Simple stats loader
+async function loadStats() {
+    try {
+        console.log('🔍 Loading stats...');
+        
+        const response = await fetch('/api/wallet/stats');
+        const data = await response.json();
+        
+        console.log('📊 Stats response:', data);
+        
+        if (data.status === 'success' && data.stats) {
+            const container = document.getElementById('statsContainer');
+            if (container) {
+                const stats = data.stats;
+                container.innerHTML = `
+                    <div class="col-md-3 col-6">
+                        <div class="stat-item">
+                            <span class="stat-value">${stats.total_wallets.toLocaleString()}</span>
+                            <div class="stat-label">Total Wallets</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3 col-6">
+                        <div class="stat-item">
+                            <span class="stat-value">${stats.average_score || 0}</span>
+                            <div class="stat-label">Average Rating</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3 col-6">
+                        <div class="stat-item">
+                            <span class="stat-value">${stats.web_submissions || 0}</span>
+                            <div class="stat-label">Web Added</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3 col-6">
+                        <div class="stat-item">
+                            <span class="stat-value">${stats.today_additions || 0}</span>
+                            <div class="stat-label">Added Today</div>
+                        </div>
+                    </div>
+                `;
+                console.log('✅ Stats displayed successfully');
+            } else {
+                console.error('❌ Stats container element not found');
+            }
+        } else {
+            console.error('❌ Invalid API response:', data);
+        }
+    } catch (error) {
+        console.error('❌ Error loading stats:', error);
+    }
+}
+
+// Load stats when page is ready
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('📄 DOM ready, loading stats...');
+    setTimeout(loadStats, 100); // Small delay to ensure everything is ready
+});
+
+// Make function globally available for manual testing
+window.loadStats = loadStats;
+</script>
+{% endblock %}
