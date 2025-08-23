@@ -11,7 +11,7 @@ import os
 import sys
 
 # Import your existing config
-from config.settings import settings, flask_config
+from config.settings import settings
 from services.cache.cache_service import startup_cache_service, shutdown_cache_service
 
 def setup_uvloop():
@@ -44,13 +44,15 @@ async def lifespan(app: FastAPI):
     logger.info(f"Environment: {settings.environment}")
     logger.info(f"Supported networks: {[net.value for net in settings.monitor.supported_networks]}")
     
+    port = os.getenv('PORT', '8001')
+    logger.info(f"🌐 Starting on port: {port}")
+
     # Initialize cache service
     try:
         await startup_cache_service()
         logger.info("✅ Cache service initialized")
     except Exception as e:
         logger.error(f"❌ Cache service initialization failed: {e}")
-        # Continue without cache - it's not critical for startup
     
     yield
     
@@ -130,13 +132,14 @@ from api.routes.frontend import router as frontend_router
 from api.routes.monitoring import router as monitoring_router
 from api.routes.token import router as token_router 
 from api.routes.wallets import router as wallet_router 
-
+from api.routes.auth import router as auth_router 
 
 # Include routers
 app.include_router(analysis_router, prefix="/api")
 app.include_router(status_router, prefix="/api")
-app.include_router(cache_router, prefix="/api")  # Now uses FastAPI-native cache
+app.include_router(cache_router, prefix="/api")
 app.include_router(frontend_router)
+app.include_router(auth_router) 
 app.include_router(monitoring_router, prefix="/api") 
 app.include_router(token_router, prefix="/api") 
 app.include_router(wallet_router, prefix="/api")

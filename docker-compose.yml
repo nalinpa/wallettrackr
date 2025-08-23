@@ -16,9 +16,10 @@ services:
       - SECRET_KEY=${SECRET_KEY}
       - MONGO_URI=mongodb://mongodb:27017/crypto_tracker
       - REQUIRE_AUTH=${REQUIRE_AUTH:-false}
-      - AUTH_PASSWORD=${AUTH_PASSWORD}
+      - APP_PASSWORD=${APP_PASSWORD}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - REQUIRE_AUTH=${REQUIRE_AUTH:-false}
     volumes:
       # Persist cache, logs and config
       - ./cache:/app/cache
@@ -38,6 +39,7 @@ services:
       - "27018:27017"
     volumes:
       - mongodb_data:/data/db
+      - ./mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
     restart: unless-stopped
     networks:
       - crypto-network

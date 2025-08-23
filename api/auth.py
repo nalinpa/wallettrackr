@@ -1,88 +1,75 @@
-from fastapi import Request, HTTPException
-from typing import Optional
-import time
+# api/auth.py - Updated to use the new auth service
+from fastapi import Request, HTTPException, Depends
+from typing import Optional, Dict, Any
 import logging
-import os
-from datetime import datetime
+
+# Import the new auth service
+from services.auth.auth_service import (
+    auth_service, 
+    require_auth as _require_auth,
+    get_template_context as _get_template_context,
+    get_current_user
+)
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-# Configuration
-REQUIRE_AUTH = os.environ.get('REQUIRE_AUTH', 'false').lower() == 'true'
-AUTH_PASSWORD = os.environ.get('AUTH_PASSWORD', 'admin')
-ENVIRONMENT = os.environ.get('ENVIRONMENT', 'development')
+# Backward compatibility functions for existing code
+def require_auth(request: Request = None):
+    """Dependency to require authentication - Updated"""
+    if request:
+        return auth_service.require_auth(request)
+    
+    # If called without request, return the dependency
+    def _auth_dependency(request: Request):
+        return auth_service.require_auth(request)
+    return _auth_dependency
 
-# Simple session store (use Redis in production)
-sessions = {}
+def get_template_context(request: Request) -> Dict[str, Any]:
+    """Get template context - Updated"""
+    return auth_service.get_template_context(request)
 
-def create_session(request: Request, user_id: str = "user"):
-    """Create a session for the user"""
-    session_id = f"session_{len(sessions)}_{int(time.time())}"
-    sessions[session_id] = {"user_id": user_id, "created": datetime.now()}
-    return session_id
+def create_session(request: Request, user_id: str = "admin") -> str:
+    """Create a session - Updated"""
+    return auth_service.session_manager.create_session(user_id)
 
 def get_session_from_cookie(request: Request) -> Optional[str]:
-    """Get session from cookie"""
-    session_id = request.cookies.get("session_id")
-    return session_id if session_id and session_id in sessions else None
+    """Get session from cookie - Updated"""
+    return auth_service.get_session_from_request(request)
 
-def require_auth(request: Request):
-    """Dependency to require authentication"""
-    if not REQUIRE_AUTH:
-        return True
+def get_session_status(request: Request) -> Dict[str, Any]:
+    """Get current session status - Updated"""
+    session_id = auth_service.get_session_from_request(request)
+    is_authenticated = auth_service.is_authenticated(request)
+    session_info = None
     
-    session_id = get_session_from_cookie(request)
-    if not session_id:
-        raise HTTPException(status_code=401, detail="Authentication required")
-    return True
-
-def get_template_context(request: Request):
-    """Get common template context"""
-    return {
-        "request": request,
-        "current_time": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        "environment": ENVIRONMENT,
-        "require_auth": REQUIRE_AUTH,
-        "authenticated": get_session_from_cookie(request) is not None or not REQUIRE_AUTH
-    }
-
-def cleanup_expired_sessions():
-    """Clean up expired sessions"""
-    current_time = datetime.now()
-    expired_sessions = []
-    
-    for session_id, session_data in sessions.items():
-        # Sessions expire after 24 hours of inactivity
-        last_activity = session_data.get("last_activity", session_data["created"])
-        if (current_time - last_activity).total_seconds() > 86400:
-            expired_sessions.append(session_id)
-    
-    for session_id in expired_sessions:
-        del sessions[session_id]
-        
-    if expired_sessions:
-        logger.info(f"Cleaned up {len(expired_sessions)} expired sessions")
-    
-    return len(expired_sessions)
-
-# Session management utilities
-def get_session_status(request: Request):
-    """Get current session status"""
-    session_id = get_session_from_cookie(request)
-    is_authenticated = session_id is not None or not REQUIRE_AUTH
+    if session_id and is_authenticated:
+        session_info = auth_service.session_manager.get_session_info(session_id)
     
     return {
         "authenticated": is_authenticated,
-        "auth_required": REQUIRE_AUTH,
-        "session_id": session_id if session_id else None,
-        "user_id": sessions.get(session_id, {}).get("user_id") if session_id else None
+        "auth_required": settings.auth.require_auth,
+        "session_id": session_id,
+        "user_id": session_info.get("user_id") if session_info else None,
+        "expires_at": session_info.get("expires_at").isoformat() if session_info and session_info.get("expires_at") else None
     }
 
-def refresh_session(request: Request):
-    """Refresh current session"""
-    session_id = get_session_from_cookie(request)
-    if session_id and session_id in sessions:
-        sessions[session_id]["last_activity"] = datetime.now()
+def refresh_session(request: Request) -> Dict[str, str]:
+    """Refresh current session - Updated"""
+    session_id = auth_service.get_session_from_request(request)
+    if session_id and auth_service.session_manager.validate_session(session_id):
         return {"status": "refreshed"}
     else:
         raise HTTPException(status_code=401, detail="No active session")
+
+def cleanup_expired_sessions() -> int:
+    """Clean up expired sessions - Updated"""
+    # The new auth service automatically cleans up sessions
+    auth_service.session_manager._cleanup_expired_sessions()
+    return len(auth_service.session_manager._sessions)
+
+# Legacy compatibility
+REQUIRE_AUTH = settings.auth.require_auth
+AUTH_PASSWORD = settings.auth.app_password
+ENVIRONMENT = settings.environment
+sessions = auth_service.session_manager._sessions  # Direct access for compatibility

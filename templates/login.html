@@ -1,206 +1,439 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - Crypto Alpha Analysis</title>
+{% extends "base.html" %}
+
+{% block title %}Login - Crypto Alpha Analysis{% endblock %}
+
+{% block head %}
+<style>
+    /* Login-specific styles that override/extend base styles */
+    .login-wrapper {
+        min-height: calc(100vh - 200px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 40px 20px;
+    }
     
-    <!-- Bootstrap CSS -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    .login-card {
+        background: rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 16px;
+        padding: 40px;
+        width: 100%;
+        max-width: 450px;
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+        text-align: center;
+    }
     
-    <!-- Font Awesome for icons -->
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    .login-logo {
+        font-size: 2.5rem;
+        font-weight: bold;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        margin-bottom: 10px;
+    }
     
-    <style>
-        body {
-            background: linear-gradient(135deg, #0f0f23 0%, #1a1a3e 50%, #2d1b69 100%);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        
+    .login-subtitle {
+        color: rgba(255, 255, 255, 0.8);
+        margin-bottom: 30px;
+        font-size: 1rem;
+    }
+    
+    .form-floating {
+        margin-bottom: 20px;
+    }
+    
+    .form-floating .form-control {
+        background: rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.3);
+        color: white;
+        font-size: 1.1rem;
+        padding: 12px 16px;
+        height: 58px;
+    }
+    
+    .form-floating .form-control:focus {
+        background: rgba(255, 255, 255, 0.15);
+        border-color: #667eea;
+        box-shadow: 0 0 0 0.25rem rgba(102, 126, 234, 0.25);
+        color: white;
+    }
+    
+    .form-floating .form-control::placeholder {
+        color: rgba(255, 255, 255, 0.6);
+    }
+    
+    .form-floating label {
+        color: rgba(255, 255, 255, 0.7);
+        padding: 1rem 0.75rem;
+    }
+    
+    .login-btn {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        border: none;
+        border-radius: 12px;
+        padding: 15px 30px;
+        font-size: 1.1rem;
+        font-weight: 600;
+        width: 100%;
+        transition: all 0.3s ease;
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .login-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 25px rgba(102, 126, 234, 0.3);
+    }
+    
+    .login-btn:disabled {
+        opacity: 0.7;
+        transform: none;
+        cursor: not-allowed;
+    }
+    
+    .error-alert {
+        background: rgba(220, 53, 69, 0.2);
+        border: 1px solid rgba(220, 53, 69, 0.3);
+        color: #ff6b7a;
+        border-radius: 12px;
+        padding: 15px;
+        margin-bottom: 20px;
+        font-size: 0.95rem;
+    }
+    
+    .info-card {
+        background: rgba(13, 202, 240, 0.1);
+        border: 1px solid rgba(13, 202, 240, 0.3);
+        color: rgba(255, 255, 255, 0.9);
+        border-radius: 12px;
+        padding: 20px;
+        margin-top: 25px;
+        font-size: 0.9rem;
+    }
+    
+    .password-hint {
+        font-size: 0.85rem;
+        color: rgba(255, 255, 255, 0.6);
+        margin-top: 8px;
+        font-style: italic;
+    }
+    
+    .loading-spinner {
+        display: none;
+        margin-left: 10px;
+    }
+    
+    .spinner-border-sm {
+        width: 1rem;
+        height: 1rem;
+    }
+    
+    /* Hide navbar and footer on login page for cleaner look */
+    nav.navbar {
+        display: none !important;
+    }
+    
+    footer {
+        display: none !important;
+    }
+    
+    main.container-fluid {
+        padding: 0 !important;
+    }
+    
+    .content-wrapper {
+        min-height: 100vh;
+        background: linear-gradient(135deg, #0f0f23 0%, #1a1a3a 50%, #2d1b69 100%);
+        position: relative;
+        overflow: hidden;
+    }
+    
+    /* Animated background particles */
+    .content-wrapper::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: radial-gradient(circle at 20% 80%, rgba(102, 126, 234, 0.1) 0%, transparent 50%),
+                    radial-gradient(circle at 80% 20%, rgba(118, 75, 162, 0.1) 0%, transparent 50%);
+        animation: float 6s ease-in-out infinite;
+    }
+    
+    @keyframes float {
+        0%, 100% { transform: translateY(0px); }
+        50% { transform: translateY(-20px); }
+    }
+    
+    .dev-hint {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        background: rgba(255, 193, 7, 0.2);
+        border: 1px solid rgba(255, 193, 7, 0.3);
+        color: #ffc107;
+        padding: 10px 15px;
+        border-radius: 8px;
+        font-size: 0.8rem;
+        font-family: 'Courier New', monospace;
+    }
+    
+    @media (max-width: 576px) {
         .login-card {
-            background: linear-gradient(145deg, #2c3e50, #34495e);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
-            backdrop-filter: blur(10px);
-            width: 100%;
-            max-width: 400px;
+            padding: 30px 25px;
+            margin: 20px;
         }
         
-        .login-header {
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            border-radius: 20px 20px 0 0;
-            padding: 2rem;
-            text-align: center;
-            color: white;
+        .login-logo {
+            font-size: 2rem;
         }
         
-        .login-body {
-            padding: 2rem;
+        .dev-hint {
+            display: none;
         }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="login-wrapper">
+    <div class="login-card">
+        <div class="login-logo">
+            <i class="fas fa-rocket me-2"></i>
+            Crypto Alpha
+        </div>
+        <div class="login-subtitle">
+            Enter your password to access the alpha discovery dashboard
+        </div>
         
-        .form-control {
-            background: rgba(255, 255, 255, 0.1);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            color: white;
-            border-radius: 10px;
-            padding: 12px 16px;
-        }
+        {% if error %}
+        <div class="error-alert">
+            <i class="fas fa-exclamation-triangle me-2"></i>
+            {{ error }}
+            {% if password_hint %}
+            <div class="password-hint">
+                <i class="fas fa-info-circle me-1"></i>
+                {{ password_hint }}
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
         
-        .form-control:focus {
-            background: rgba(255, 255, 255, 0.15);
-            border-color: #667eea;
-            box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
-            color: white;
-        }
-        
-        .form-control::placeholder {
-            color: rgba(255, 255, 255, 0.6);
-        }
-        
-        .btn-login {
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            border: none;
-            border-radius: 10px;
-            padding: 12px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            transition: all 0.3s ease;
-        }
-        
-        .btn-login:hover {
-            background: linear-gradient(135deg, #764ba2, #667eea);
-            transform: translateY(-2px);
-            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
-        }
-        
-        .animated-bg {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            z-index: -1;
-            opacity: 0.1;
-        }
-        
-        .floating-icon {
-            position: absolute;
-            animation: float 6s ease-in-out infinite;
-        }
-        
-        @keyframes float {
-            0%, 100% { transform: translateY(0px); }
-            50% { transform: translateY(-20px); }
-        }
-        
-        .alert {
-            border-radius: 10px;
-            border: none;
-        }
-    </style>
-</head>
-<body class="text-light">
-    <div class="animated-bg">
-        <i class="fas fa-bitcoin floating-icon" style="top: 10%; left: 10%; font-size: 2rem; animation-delay: 0s;"></i>
-        <i class="fas fa-ethereum floating-icon" style="top: 20%; right: 15%; font-size: 1.5rem; animation-delay: 2s;"></i>
-        <i class="fas fa-chart-line floating-icon" style="bottom: 20%; left: 20%; font-size: 1.8rem; animation-delay: 4s;"></i>
-        <i class="fas fa-coins floating-icon" style="bottom: 30%; right: 10%; font-size: 1.3rem; animation-delay: 1s;"></i>
-    </div>
-    
-    <div class="container">
-        <div class="row justify-content-center">
-            <div class="col-md-6 col-lg-4">
-                <div class="login-card">
-                    <div class="login-header">
-                        <i class="fas fa-shield-alt fa-3x mb-3"></i>
-                        <h2 class="mb-0">Crypto Alpha Login</h2>
-                        <p class="mb-0 opacity-75">Secure Access Portal</p>
+        <form method="POST" action="/login" id="loginForm">
+            <div class="form-floating">
+                <input 
+                    type="password" 
+                    class="form-control" 
+                    id="password" 
+                    name="password" 
+                    placeholder="Password"
+                    required 
+                    autocomplete="current-password"
+                >
+                <label for="password">
+                    <i class="fas fa-lock me-2"></i>Password
+                </label>
+            </div>
+            
+            <button type="submit" class="btn btn-primary login-btn" id="loginBtn">
+                <i class="fas fa-sign-in-alt me-2"></i>
+                <span id="loginText">Access Dashboard</span>
+                <span class="loading-spinner" id="loadingSpinner">
+                    <div class="spinner-border spinner-border-sm text-light" role="status">
+                        <span class="visually-hidden">Loading...</span>
                     </div>
-                    
-                    <div class="login-body">
-                        {% if error %}
-                            <div class="alert alert-danger mb-3" role="alert">
-                                <i class="fas fa-exclamation-triangle me-2"></i>{{ error }}
-                            </div>
-                        {% endif %}
-                        
-                        <form method="post">
-                            <div class="mb-3">
-                                <label for="password" class="form-label">
-                                    <i class="fas fa-key me-2"></i>Access Password
-                                </label>
-                                <input type="password" 
-                                       name="password" 
-                                       id="password"
-                                       class="form-control" 
-                                       placeholder="Enter your password" 
-                                       required 
-                                       autofocus>
-                            </div>
-                            
-                            <div class="d-grid">
-                                <button type="submit" class="btn btn-primary btn-login">
-                                    <i class="fas fa-sign-in-alt me-2"></i>
-                                    Access Dashboard
-                                </button>
-                            </div>
-                        </form>
-                        
-                        <div class="text-center mt-4">
-                            <small class="text-muted">
-                                <i class="fas fa-lock me-1"></i>
-                                Your connection is secure and encrypted
-                            </small>
-                        </div>
-                    </div>
+                </span>
+            </button>
+        </form>
+        
+        <div class="info-card">
+            <div class="row text-start">
+                <div class="col-6">
+                    <strong><i class="fas fa-server me-2"></i>Environment:</strong><br>
+                    <span class="badge bg-{{ 'success' if environment == 'production' else 'warning' }}">
+                        {{ environment|title }}
+                    </span>
                 </div>
-                
-                <div class="text-center mt-4">
-                    <small class="text-muted">
-                        Crypto Alpha Analysis &copy; 2025 | 
-                        <span id="current-time"></span>
-                    </small>
+                <div class="col-6">
+                    <strong><i class="fas fa-shield-alt me-2"></i>Security:</strong><br>
+                    <span class="badge bg-{{ 'primary' if auth_required else 'secondary' }}">
+                        {{ "Enabled" if auth_required else "Disabled" }}
+                    </span>
                 </div>
+            </div>
+            
+            <hr class="my-3" style="border-color: rgba(255, 255, 255, 0.2);">
+            
+            <div class="text-center">
+                <small class="text-muted">
+                    <i class="fas fa-clock me-1"></i>
+                    {{ current_time }}
+                </small>
             </div>
         </div>
     </div>
-    
-    <!-- Bootstrap JS -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
-    
-    <script>
-        // Update current time
-        function updateTime() {
-            const now = new Date();
-            document.getElementById('current-time').textContent = now.toLocaleString();
-        }
-        updateTime();
-        setInterval(updateTime, 1000);
-        
-        // Auto-hide alerts after 5 seconds
-        setTimeout(function() {
-            const alerts = document.querySelectorAll('.alert');
-            alerts.forEach(alert => {
-                const bsAlert = new bootstrap.Alert(alert);
-                bsAlert.close();
-            });
-        }, 5000);
-        
-        // Focus animation
+</div>
+
+{% if environment == "development" %}
+<div class="dev-hint">
+    <i class="fas fa-keyboard me-2"></i>
+    <strong>Dev Tip:</strong> Press Ctrl+Shift+D to fill dev password
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Enhanced login functionality
+    document.addEventListener('DOMContentLoaded', function() {
+        const form = document.getElementById('loginForm');
+        const loginBtn = document.getElementById('loginBtn');
+        const loginText = document.getElementById('loginText');
+        const loadingSpinner = document.getElementById('loadingSpinner');
         const passwordInput = document.getElementById('password');
-        passwordInput.addEventListener('focus', function() {
-            this.parentElement.style.transform = 'scale(1.02)';
-            this.parentElement.style.transition = 'transform 0.3s ease';
+        
+        // Focus password input on load
+        passwordInput.focus();
+        
+        // Handle form submission
+        form.addEventListener('submit', function(e) {
+            const password = passwordInput.value.trim();
+            
+            if (!password) {
+                e.preventDefault();
+                showToast('Please enter a password', 'warning');
+                return;
+            }
+            
+            // Show loading state
+            loginBtn.disabled = true;
+            loginText.textContent = 'Authenticating...';
+            loadingSpinner.style.display = 'inline-block';
         });
         
-        passwordInput.addEventListener('blur', function() {
-            this.parentElement.style.transform = 'scale(1)';
+        // Handle Enter key
+        passwordInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                form.submit();
+            }
         });
-    </script>
-</body>
-</html>
+        
+        // Clear error styling when user starts typing
+        passwordInput.addEventListener('input', function() {
+            const errorAlert = document.querySelector('.error-alert');
+            if (errorAlert && passwordInput.value.length > 0) {
+                errorAlert.style.opacity = '0.6';
+                errorAlert.style.transform = 'scale(0.98)';
+            }
+        });
+        
+        // Development keyboard shortcuts
+        {% if environment == "development" %}
+        document.addEventListener('keydown', function(e) {
+            // Ctrl+Shift+D to fill development password
+            if (e.ctrlKey && e.shiftKey && e.key === 'D') {
+                e.preventDefault();
+                passwordInput.value = 'admin';
+                passwordInput.focus();
+                showToast('Development password filled', 'info');
+            }
+            
+            // Ctrl+Shift+L to auto-login with dev password
+            if (e.ctrlKey && e.shiftKey && e.key === 'L') {
+                e.preventDefault();
+                passwordInput.value = 'admin';
+                form.submit();
+            }
+        });
+        
+        // Show dev hints
+        console.log('🔧 Development Mode Active');
+        console.log('🔑 Keyboard Shortcuts:');
+        console.log('   Ctrl+Shift+D: Fill dev password');
+        console.log('   Ctrl+Shift+L: Auto-login with dev password');
+        {% endif %}
+        
+        // API-based login function (alternative)
+        window.loginWithAPI = async function(password) {
+            try {
+                const response = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ password: password })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showToast('Login successful! Redirecting...', 'success');
+                    setTimeout(() => {
+                        window.location.href = data.redirect_url || '/';
+                    }, 500);
+                } else {
+                    throw new Error(data.message || 'Login failed');
+                }
+            } catch (error) {
+                console.error('API Login error:', error);
+                showToast('Login failed: ' + error.message, 'danger');
+                
+                // Reset button state
+                loginBtn.disabled = false;
+                loginText.textContent = 'Access Dashboard';
+                loadingSpinner.style.display = 'none';
+            }
+        };
+        
+        // Check authentication status
+        fetch('/api/auth/status')
+            .then(response => response.json())
+            .then(data => {
+                if (data.authenticated) {
+                    console.log('✅ Already authenticated, redirecting...');
+                    window.location.href = '/';
+                }
+            })
+            .catch(error => {
+                console.log('Auth status check failed:', error);
+            });
+    });
+    
+    // Toast notification function (if not defined in base)
+    if (typeof showToast === 'undefined') {
+        function showToast(message, type = 'info') {
+            const toast = document.createElement('div');
+            toast.className = `toast align-items-center text-white bg-${type} border-0`;
+            toast.setAttribute('role', 'alert');
+            toast.innerHTML = `
+                <div class="d-flex">
+                    <div class="toast-body">
+                        <i class="fas fa-${type === 'success' ? 'check' : type === 'danger' ? 'exclamation-triangle' : 'info-circle'} me-2"></i>
+                        ${message}
+                    </div>
+                    <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+                </div>
+            `;
+            
+            const container = document.getElementById('toast-container');
+            if (container) {
+                container.appendChild(toast);
+                const bsToast = new bootstrap.Toast(toast);
+                bsToast.show();
+                
+                // Remove toast element after it's hidden
+                toast.addEventListener('hidden.bs.toast', () => {
+                    toast.remove();
+                });
+            } else {
+                // Fallback to alert if toast container not available
+                alert(message);
+            }
+        }
+    }
+</script>
+{% endblock %}
