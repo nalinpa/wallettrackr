@@ -179,7 +179,7 @@ pyrightconfig.json
 
 # Application-specific directories
 alerts/
-config/
+#config/
 logs/
 
 # Database files
